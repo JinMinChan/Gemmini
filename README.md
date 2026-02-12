@@ -1,0 +1,108 @@
+# Gemmini 프로젝트 구조 설명서
+
+이 문서는 배포 번들의 **파일별 역할과 책임**을 설명합니다.  
+실행 방법보다, 어떤 파일이 어떤 기능을 수행하는지 중심으로 정리했습니다.
+
+## 1. 최상위 엔트리/설정 파일
+
+### `run_server.py`
+- Uvicorn 실행 진입점입니다.
+- `app.server:app`(FastAPI 앱 객체)을 바인딩해 HTTP 서버를 시작합니다.
+- 서비스 프로세스를 띄우는 가장 얇은 부트스트랩 파일입니다.
+
+### `start_ngrok.sh`
+- 로컬 `127.0.0.1:8000` 서버를 외부에 노출하기 위한 ngrok 실행 스크립트입니다.
+- authtoken 설정 여부를 검사하고, 서버 헬스체크(`GET /api/health`)까지 확인합니다.
+- 운영 코드가 아니라 배포/접속 편의용 보조 스크립트입니다.
+
+### `requirements.txt`
+- 서버 실행에 필요한 Python 의존성 단일 목록입니다.
+- 웹 프레임워크(FastAPI/Uvicorn), OCR(OpenCV/EasyOCR), RL 추론(Torch/SB3) 의존성이 모두 포함되어 있습니다.
+
+## 2. API 계층 (`app/`)
+
+### `app/server.py`
+- 서비스의 핵심 백엔드입니다.
+- 주요 책임:
+- 화면 캡처 이미지 입력 검증/디코딩
+- OCR 파서 호출 및 UI 상태 변환
+- RL 모델 추론(추천 행동 산출)
+- 목표 성공 확률 Monte Carlo 추정
+- 분석 결과/이미지/버그제보를 IP 단위 폴더로 저장
+- FastAPI 라우팅:
+- `/` 정적 페이지 반환
+- `/api/health` 헬스체크
+- `/api/upload` 업로드 저장
+- `/api/analyze` OCR+RL 통합 분석
+- `/api/report` 버그/개선 제보 저장
+
+### `app/static/index.html`
+- 단일 페이지 프론트엔드(UI+JS)입니다.
+- 주요 책임:
+- 화면 공유 시작/중지
+- 캡처 프레임을 `/api/analyze`로 전송
+- OCR 결과/추천 행동/성공 확률 표시
+- 수동 스탯 조작(현재/목표 값) 및 옵션 반영
+- 버그 제보 입력 후 `/api/report` 전송
+
+### `app/__init__.py`
+- `app` 디렉터리를 Python 패키지로 인식시키는 초기화 파일입니다.
+
+### `app/records/.gitkeep`
+- 실행 중 생성되는 기록 데이터 루트 디렉터리의 자리표시자입니다.
+- 실제 운영 시 `records/<ip>/images|json|message`가 동적으로 생성됩니다.
+
+### `app/uploads/.gitkeep`
+- 업로드 임시 디렉터리 자리표시자입니다.
+- 현재 구조에서는 중복 저장을 최소화했지만, 런타임 호환 경로 보존을 위해 폴더를 유지합니다.
+
+## 3. OCR 계층 (`gemmini_vision/`)
+
+### `gemmini_vision/detect.py`
+- OCR 엔진 및 텍스트/숫자 인식 유틸리티를 담당합니다.
+- 주요 기능:
+- EasyOCR 리더 초기화(`ko`, `en`)
+- ROI 전처리/다중 전처리(숫자 인식 안정화)
+- 옵션/횟수/비용 텍스트 정규화
+- OCR 오인식 보정용 후처리
+
+### `gemmini_vision/parser.py`
+- `detect.py` 결과를 게임 상태 구조로 변환하는 어댑터입니다.
+- 주요 기능:
+- ROI별 OCR 실행 및 결과 통합
+- 옵션 리스트를 UI 상태 형식으로 매핑
+- `possible/cost/count` 값을 서비스에서 쓰는 상태값으로 변환
+
+### `gemmini_vision/__init__.py`
+- OCR 패키지 초기화 파일입니다.
+
+## 4. RL 정책/환경 계층 (`gem_core/`)
+
+### `gem_core/role_env.py`
+- 역할(딜러/서폿), 젬 타입을 포함한 강화학습 환경 정의 파일입니다.
+- 주요 기능:
+- 상태/행동/관측 벡터 정의
+- 옵션 생성, 상태 전이, 종료 조건
+- 보상(잠재함수/보조신호) 계산
+- 서버의 정책 추론과 성공확률 롤아웃 시뮬레이션 기반 환경 제공
+
+### `gem_core/__init__.py`
+- RL 코어 패키지 초기화 파일입니다.
+
+## 5. 모델 아티팩트 (`models/`)
+
+### `models/production/gemmini_v9/best_model.zip`
+- 현재 서버에서 사용하는 단일 운영 모델입니다.
+- `app/server.py`의 기본 모델 경로가 이 파일을 직접 참조합니다.
+- 배포 번들에는 이 모델 하나만 포함합니다.
+
+## 6. 현재 정리 원칙
+
+- 폴더명은 역할 기준으로 분리:
+- `app`: 웹/API
+- `gemmini_vision`: OCR
+- `gem_core`: RL 환경/정책 지원
+- 불필요 산출물 제거:
+- `__pycache__`, 과거 debug 로그, 학습 체크포인트/평가 이미지 미포함
+- 운영 모델 단일화:
+- 레거시 fallback 모델 제거, 현재 사용 모델만 유지
