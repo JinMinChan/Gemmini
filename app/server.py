@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -55,6 +56,12 @@ ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("GEMMINI_RATE_LIMIT_WINDOW_SECONDS", "60"))
 RATE_LIMIT_MAX_REQUESTS = int(os.getenv("GEMMINI_RATE_LIMIT_MAX_REQUESTS", "20"))
 
+REPORT_CACHE_TTL_SECONDS = int(os.getenv("GEMMINI_REPORT_CACHE_TTL_SECONDS", "1800"))
+REPORT_CACHE_MAX_ITEMS_PER_CLIENT = int(os.getenv("GEMMINI_REPORT_CACHE_MAX_ITEMS_PER_CLIENT", "6"))
+REPORT_CACHE_MAX_TOTAL_MB = int(os.getenv("GEMMINI_REPORT_CACHE_MAX_TOTAL_MB", "256"))
+REPORT_CACHE_MAX_ENTRY_BYTES = int(os.getenv("GEMMINI_REPORT_CACHE_MAX_ENTRY_BYTES", str(8 * 1024 * 1024)))
+REPORT_ATTACH_MAX_ITEMS = int(os.getenv("GEMMINI_REPORT_ATTACH_MAX_ITEMS", "3"))
+
 ACTION_NAME = {
     0: "process",
     1: "reroll",
@@ -66,6 +73,9 @@ _parser_instance = None
 _rl_runtime = None
 _goal_success_runtime = None
 _runtime_lock = threading.Lock()
+_report_cache_lock = threading.Lock()
+_report_cache_total_bytes = 0
+_report_cache: Dict[str, Deque[dict]] = defaultdict(deque)
 
 app = FastAPI(title="Gemmini Web API", version="0.3.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -188,6 +198,224 @@ def _verify_proxy_secret(request: Request) -> None:
     supplied = str(request.headers.get(PROXY_SHARED_SECRET_HEADER, "") or "").strip()
     if not supplied or supplied != PROXY_SHARED_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized proxy key")
+
+def _ext_from_kind(kind: str) -> str:
+    k = str(kind or "").strip().lower()
+    if k == "jpeg":
+        return "jpg"
+    if k in ("png", "webp", "jpg"):
+        return k
+    return "bin"
+
+
+def _prune_report_cache_locked(now_ts: float) -> None:
+    global _report_cache_total_bytes
+    expire_before = float(now_ts) - float(REPORT_CACHE_TTL_SECONDS)
+    # Drop expired + enforce per-client caps.
+    for cid in list(_report_cache.keys()):
+        bucket = _report_cache.get(cid)
+        if not bucket:
+            _report_cache.pop(cid, None)
+            continue
+        while bucket and float(bucket[0].get("ts", 0.0)) < expire_before:
+            popped = bucket.popleft()
+            _report_cache_total_bytes -= int(popped.get("bytes", 0) or 0)
+        while len(bucket) > int(REPORT_CACHE_MAX_ITEMS_PER_CLIENT):
+            popped = bucket.popleft()
+            _report_cache_total_bytes -= int(popped.get("bytes", 0) or 0)
+        if not bucket:
+            _report_cache.pop(cid, None)
+
+    # Drop oldest globally if over total budget.
+    max_total = int(REPORT_CACHE_MAX_TOTAL_MB) * 1024 * 1024
+    while _report_cache_total_bytes > max_total and _report_cache:
+        oldest_cid: Optional[str] = None
+        oldest_ts: Optional[float] = None
+        for cid, bucket in _report_cache.items():
+            if not bucket:
+                continue
+            ts = float(bucket[0].get("ts", 0.0))
+            if oldest_ts is None or ts < oldest_ts:
+                oldest_ts = ts
+                oldest_cid = cid
+        if oldest_cid is None:
+            break
+        bucket = _report_cache.get(oldest_cid)
+        if not bucket:
+            _report_cache.pop(oldest_cid, None)
+            continue
+        popped = bucket.popleft()
+        _report_cache_total_bytes -= int(popped.get("bytes", 0) or 0)
+        if not bucket:
+            _report_cache.pop(oldest_cid, None)
+
+
+def _report_cache_add(
+    *,
+    client_id: Optional[str],
+    entry: dict,
+) -> None:
+    """
+    Keep a small in-memory cache of recent analyze inputs keyed by client_id.
+    This enables "attach evidence to bug report" without writing ROI images to
+    disk on every analyze call.
+    """
+    cid = _sanitize_rate_key(client_id) if client_id else ""
+    if not cid:
+        return
+    now_ts = time.time()
+    item_bytes = int(entry.get("bytes", 0) or 0)
+    if item_bytes < 0:
+        item_bytes = 0
+    if item_bytes > int(REPORT_CACHE_MAX_ENTRY_BYTES):
+        # Avoid caching suspiciously large payloads.
+        entry = dict(entry)
+        entry["rois"] = {}
+        entry["bytes"] = 0
+        item_bytes = 0
+    entry["ts"] = float(entry.get("ts") or now_ts)
+    entry["cached_at"] = float(now_ts)
+
+    global _report_cache_total_bytes
+    with _report_cache_lock:
+        _prune_report_cache_locked(now_ts)
+        bucket = _report_cache[cid]
+        bucket.append(entry)
+        _report_cache_total_bytes += item_bytes
+        _prune_report_cache_locked(now_ts)
+
+
+def _report_cache_pick(
+    *,
+    client_id: Optional[str],
+    record_id: Optional[str],
+) -> List[dict]:
+    cid = _sanitize_rate_key(client_id) if client_id else ""
+    if not cid:
+        return []
+    now_ts = time.time()
+    with _report_cache_lock:
+        _prune_report_cache_locked(now_ts)
+        items = list(_report_cache.get(cid) or [])
+
+    if not items:
+        return []
+
+    max_items = max(1, int(REPORT_ATTACH_MAX_ITEMS))
+    rid = str(record_id or "").strip()
+    if rid:
+        hit_idx = None
+        for idx, item in enumerate(items):
+            if str(item.get("record_id") or "") == rid:
+                hit_idx = idx
+                break
+        if hit_idx is not None:
+            start = max(0, hit_idx - max_items + 1)
+            return items[start : hit_idx + 1]
+    return items[-max_items:]
+
+
+def _persist_report_attachments(
+    *,
+    report_abs_path: Path,
+    report_rel_path: str,
+    client_id: Optional[str],
+    record_id: Optional[str],
+    client_context: Any,
+) -> dict:
+    """
+    Persist a "bundle" directory next to the bug report json containing:
+    - ROI images (when available)
+    - copies of referenced analyze json files (small; easier to inspect)
+    Returns an attachments payload suitable for embedding in the report json.
+    """
+    report_rel = Path(str(report_rel_path))
+    bundle_name = report_rel.stem
+    bundle_abs_dir = report_abs_path.parent / bundle_name
+    roi_abs_dir = bundle_abs_dir / "roi"
+    analyze_abs_dir = bundle_abs_dir / "analyze_json"
+    roi_abs_dir.mkdir(parents=True, exist_ok=True)
+    analyze_abs_dir.mkdir(parents=True, exist_ok=True)
+
+    bundle_rel_dir = report_rel.parent / bundle_name
+    selected = _report_cache_pick(client_id=client_id, record_id=record_id)
+
+    saved_items: List[dict] = []
+    for item in selected:
+        rid = str(item.get("record_id") or "").strip()
+        bucket = item.get("record_bucket") or {}
+        date_dir = str(bucket.get("date") or "").strip()
+        hour_dir = str(bucket.get("hour") or "").strip()
+        json_rel_path = str(item.get("json_path") or "").strip() or None
+        image_rel_path = str(item.get("image_path") or "").strip() or None
+
+        roi_files: List[dict] = []
+        rois = item.get("rois") if isinstance(item.get("rois"), dict) else {}
+        for label, roi in (rois or {}).items():
+            if not isinstance(roi, dict):
+                continue
+            kind = roi.get("kind") or "png"
+            ext = _ext_from_kind(str(kind))
+            data = roi.get("data")
+            if not isinstance(data, (bytes, bytearray)):
+                continue
+            out_name = f"{rid}__{label}.{ext}"
+            out_abs = roi_abs_dir / out_name
+            out_abs.write_bytes(bytes(data))
+            roi_files.append(
+                {
+                    "label": str(label),
+                    "kind": str(kind),
+                    "bytes": int(len(data)),
+                    "path": str((bundle_rel_dir / "roi" / out_name).as_posix()),
+                }
+            )
+
+        # Copy analyze json for convenience (small).
+        copied_analyze = None
+        if date_dir and hour_dir and rid:
+            src_abs = RECORDS_DIR / date_dir / hour_dir / "json" / f"{rid}.json"
+            if src_abs.exists():
+                dst_abs = analyze_abs_dir / f"{rid}.json"
+                try:
+                    shutil.copy2(src_abs, dst_abs)
+                    copied_analyze = str((bundle_rel_dir / "analyze_json" / f"{rid}.json").as_posix())
+                except Exception:
+                    copied_analyze = None
+
+        saved_items.append(
+            {
+                "record_id": rid or None,
+                "record_bucket": {"date": date_dir or None, "hour": hour_dir or None},
+                "ocr_mode": item.get("ocr_mode"),
+                "roi_schema_version": item.get("roi_schema_version"),
+                "json_path": json_rel_path,
+                "image_path": image_rel_path,
+                "roi_files": roi_files,
+                "analyze_json_copy": copied_analyze,
+                "client_debug": item.get("client_debug"),
+            }
+        )
+
+    meta = {
+        "bundle": str(bundle_rel_dir.as_posix()),
+        "attached_records": saved_items,
+        "attached_count": int(len(saved_items)),
+        "client_id": _sanitize_rate_key(client_id) or None,
+        "record_id": str(record_id or "").strip() or None,
+        "client_context": _to_builtin(client_context) if client_context is not None else None,
+        "cached_limits": {
+            "ttl_seconds": int(REPORT_CACHE_TTL_SECONDS),
+            "max_items_per_client": int(REPORT_CACHE_MAX_ITEMS_PER_CLIENT),
+            "max_total_mb": int(REPORT_CACHE_MAX_TOTAL_MB),
+            "attach_max_items": int(REPORT_ATTACH_MAX_ITEMS),
+        },
+    }
+    (bundle_abs_dir / "meta.json").write_text(
+        json.dumps(_to_builtin(meta), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return meta
 
 
 def _sniff_image_kind(data: bytes) -> str | None:
@@ -1192,6 +1420,7 @@ async def submit_report(
     message: str = Form(...),
     record_id: Optional[str] = Form(None),
     client_id: Optional[str] = Form(None),
+    client_context: Optional[str] = Form(None),
 ) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
@@ -1204,6 +1433,13 @@ async def submit_report(
     if len(text) > 4000:
         raise HTTPException(status_code=400, detail="message too long (max 4000 chars)")
 
+    parsed_context: Any = None
+    if client_context:
+        try:
+            parsed_context = json.loads(client_context)
+        except Exception:
+            parsed_context = {"raw": str(client_context)}
+
     rel_path = _persist_bug_report(
         client_ip=ip,
         client_id=_sanitize_rate_key(client_id) or None,
@@ -1211,7 +1447,43 @@ async def submit_report(
         record_id=record_id,
         user_agent=request.headers.get("user-agent"),
     )
-    return {"ok": True, "message_path": rel_path}
+
+    report_abs_path = (BASE_DIR / rel_path).resolve()
+    attachments: Optional[dict] = None
+    attach_error: Optional[str] = None
+    try:
+        attachments = _persist_report_attachments(
+            report_abs_path=report_abs_path,
+            report_rel_path=rel_path,
+            client_id=client_id,
+            record_id=record_id,
+            client_context=parsed_context,
+        )
+    except Exception as e:
+        attach_error = f"{type(e).__name__}: {e}"
+
+    try:
+        existing = {}
+        if report_abs_path.exists():
+            existing = json.loads(report_abs_path.read_text(encoding="utf-8"))
+        if attachments is not None:
+            existing["attachments"] = _to_builtin(attachments)
+        if attach_error:
+            existing["attachments_error"] = str(attach_error)
+        if parsed_context is not None:
+            existing["client_context"] = _to_builtin(parsed_context)
+        report_abs_path.write_text(json.dumps(_to_builtin(existing), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Best-effort; the bug report itself is already persisted.
+        pass
+
+    resp = {"ok": True, "message_path": rel_path}
+    if attachments is not None:
+        resp["attached_count"] = int(attachments.get("attached_count") or 0)
+        resp["bundle"] = str(attachments.get("bundle") or "")
+    if attach_error:
+        resp["attachments_error"] = attach_error
+    return resp
 
 
 @app.post("/api/upload")
@@ -1316,11 +1588,17 @@ async def analyze_image(
     }
     roi_images: Dict[str, np.ndarray] = {}
     roi_meta: Dict[str, dict] = {}
+    roi_raw: Dict[str, dict] = {}
     t_roi0 = time.perf_counter()
     for label, upload in roi_uploads.items():
         if upload is None:
             continue
         roi_filename, roi_data, roi_detected = await _read_valid_image(upload)
+        roi_raw[label] = {
+            "filename": roi_filename,
+            "kind": roi_detected,
+            "data": roi_data,
+        }
         roi_arr = np.frombuffer(roi_data, dtype=np.uint8)
         roi_img = cv2.imdecode(roi_arr, cv2.IMREAD_COLOR)
         if roi_img is None:
@@ -1609,6 +1887,41 @@ async def analyze_image(
         ui_state=ui_state,
         rl_result=rl_result,
     )
+
+    try:
+        date_dir, hour_dir, _images_dir, _json_dir, _message_dir = _record_dirs_for_time_bucket(record_dt, create=False)
+        roi_bytes = 0
+        rois_to_cache: Dict[str, dict] = {}
+        for label, blob in (roi_raw or {}).items():
+            if not isinstance(blob, dict):
+                continue
+            data_blob = blob.get("data")
+            if not isinstance(data_blob, (bytes, bytearray)):
+                continue
+            roi_bytes += int(len(data_blob))
+            rois_to_cache[str(label)] = {
+                "filename": str(blob.get("filename") or ""),
+                "kind": str(blob.get("kind") or ""),
+                "data": bytes(data_blob),
+            }
+
+        _report_cache_add(
+            client_id=client_id,
+            entry={
+                "record_id": base,
+                "record_bucket": {"date": date_dir, "hour": hour_dir},
+                "json_path": record_json_rel_path,
+                "image_path": stored_image_rel_path,
+                "ocr_mode": ocr_mode,
+                "roi_schema_version": selected_roi_schema,
+                "rois": rois_to_cache,
+                "bytes": int(roi_bytes),
+                "client_debug": _to_builtin(client_debug_payload),
+            },
+        )
+    except Exception:
+        # Caching is best-effort; never fail the request because of it.
+        pass
 
     return _to_builtin(
         {
