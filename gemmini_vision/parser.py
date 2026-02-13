@@ -8,7 +8,6 @@ import numpy as np
 # detect.py에서 함수들 import
 from .detect import (
     detect_option,
-    normalize_possible,
     normalize_cost,
     normalize_count,
     read_numeric_text_with_fallback,
@@ -132,24 +131,58 @@ class GameStateParser:
                     elif label == "possible":
                         # "X회 가능" 영역은 숫자(왼쪽) + 한글(오른쪽)로 구성되어 OCR이
                         # 한글 글리프까지 같이 읽으면서 0 -> 3 같은 오인식이 자주 발생한다.
-                        # 숫자 영역만 잘라서 OCR을 수행한다.
-                        num_roi = roi
+                        # 숫자 영역만 잘라서 OCR을 수행하되, UI 스케일/해상도에 따라 숫자 위치가
+                        # 살짝 달라질 수 있으므로 여러 crop 후보를 시도한다.
+                        raw_candidates = []
                         try:
                             h, w = roi.shape[:2]
-                            # NOTE: 기존 crop(아이콘+한글 일부 포함)에서는 회색 0회 가능 상태가
-                            #       아이콘/한글에 끌려 '302' 같은 형태로 오인식되는 케이스가 있었다.
-                            #       아이콘/한글을 최대한 배제하고 숫자 중심부만 취한다.
-                            x1 = int(w * 0.30)
-                            x2 = int(w * 0.50)
                             y1 = int(h * 0.10)
                             y2 = int(h * 0.95)
-                            if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
+                            # NOTE: 기존 crop(아이콘+한글 일부 포함)에서는 회색 0회 가능 상태가
+                            #       아이콘/한글에 끌려 '302' 같은 형태로 오인식되는 케이스가 있었다.
+                            #       아이콘/한글을 최대한 배제하되, 숫자 위치 편차를 흡수하기 위해
+                            #       폭을 조금씩 넓혀가며 시도한다.
+                            for fx1, fx2 in ((0.30, 0.50), (0.26, 0.54), (0.22, 0.58)):
+                                x1 = int(w * fx1)
+                                x2 = int(w * fx2)
+                                if not (0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h):
+                                    continue
                                 num_roi = roi[y1:y2, x1:x2]
+                                raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
+                                if raw:
+                                    raw_candidates.append(raw)
+                                    if len(raw) == 1:
+                                        break
                         except Exception:
-                            num_roi = roi
+                            raw_candidates = []
 
-                        raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
-                        results["possible"] = normalize_possible(raw)
+                        if not raw_candidates:
+                            raw = read_numeric_text_with_fallback(roi, allowlist="012345", expected_len=1)
+                            if raw:
+                                raw_candidates.append(raw)
+
+                        # 후보 중 single-digit가 있으면 우선 사용, 아니면 (0 포함 시 0 우선) 보수적으로 선택.
+                        chosen = None
+                        for raw in raw_candidates:
+                            if len(raw) == 1 and raw.isdigit():
+                                chosen = int(raw)
+                                break
+                        if chosen is None:
+                            digits = []
+                            for raw in raw_candidates:
+                                digits.extend([int(ch) for ch in str(raw) if ch.isdigit()])
+                            digits = [d for d in digits if 0 <= d <= 5]
+                            if digits:
+                                counts = {}
+                                for d in digits:
+                                    counts[d] = counts.get(d, 0) + 1
+                                best = max(counts.values())
+                                tied = sorted([d for d, c in counts.items() if c == best])
+                                chosen = 0 if 0 in tied else tied[0]
+                            else:
+                                chosen = 0
+
+                        results["possible"] = int(chosen)
                         print(f"  possible: {results['possible']}")
                     
                     elif label == "cost":
@@ -218,19 +251,51 @@ class GameStateParser:
                         continue
 
                     if label == "possible":
-                        num_roi = roi
+                        raw_candidates = []
                         try:
                             h, w = roi.shape[:2]
-                            x1 = int(w * 0.30)
-                            x2 = int(w * 0.50)
                             y1 = int(h * 0.10)
                             y2 = int(h * 0.95)
-                            if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
+                            for fx1, fx2 in ((0.30, 0.50), (0.26, 0.54), (0.22, 0.58)):
+                                x1 = int(w * fx1)
+                                x2 = int(w * fx2)
+                                if not (0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h):
+                                    continue
                                 num_roi = roi[y1:y2, x1:x2]
+                                raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
+                                if raw:
+                                    raw_candidates.append(raw)
+                                    if len(raw) == 1:
+                                        break
                         except Exception:
-                            num_roi = roi
-                        raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
-                        results["possible"] = normalize_possible(raw)
+                            raw_candidates = []
+
+                        if not raw_candidates:
+                            raw = read_numeric_text_with_fallback(roi, allowlist="012345", expected_len=1)
+                            if raw:
+                                raw_candidates.append(raw)
+
+                        chosen = None
+                        for raw in raw_candidates:
+                            if len(raw) == 1 and raw.isdigit():
+                                chosen = int(raw)
+                                break
+                        if chosen is None:
+                            digits = []
+                            for raw in raw_candidates:
+                                digits.extend([int(ch) for ch in str(raw) if ch.isdigit()])
+                            digits = [d for d in digits if 0 <= d <= 5]
+                            if digits:
+                                counts = {}
+                                for d in digits:
+                                    counts[d] = counts.get(d, 0) + 1
+                                best = max(counts.values())
+                                tied = sorted([d for d, c in counts.items() if c == best])
+                                chosen = 0 if 0 in tied else tied[0]
+                            else:
+                                chosen = 0
+
+                        results["possible"] = int(chosen)
                         continue
 
                     if label == "cost":
