@@ -598,7 +598,16 @@ def extract_number_value(ocr_text, option_name, roi_img=None, category=None):
         digits = [int(d) for d in re.findall(r'\d', text)]
         if digits:
             valid = [d for d in digits if 1 <= d <= 4]
-            mag = valid[-1] if valid else max(1, min(4, digits[-1]))
+            if valid:
+                mag = valid[-1]
+            else:
+                # OCR often misreads '+1' as '7' (especially for 질서/혼돈/의지력).
+                # When we only see out-of-range digits, prefer the conservative '+1'
+                # instead of clamping to 4 (which creates obvious UI errors like '+4').
+                if category in ("willpower", "points") and any(d in (5, 7) for d in digits):
+                    mag = 1
+                else:
+                    mag = max(1, min(4, digits[-1]))
         else:
             mag = 1
 
