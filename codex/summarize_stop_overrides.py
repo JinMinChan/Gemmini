@@ -1,7 +1,7 @@
 """
 Summarize "stop override" frequency from stored analyze records.
 
-This script is read-only: it scans app/records/*/json/*.json and aggregates:
+This script is read-only: it scans app/records/**/json/*.json and aggregates:
   - how often rl.action_overridden_by == "goal_success_zero"
   - which targets / remaining attempts appear in those cases
 
@@ -42,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     root = Path(args.root)
-    files = sorted(root.glob("*/json/*.json"))
+    # Support both legacy per-IP layout and newer date/hour buckets.
+    files = sorted(root.glob("**/json/*.json"))
     if args.limit and args.limit > 0:
         files = files[: int(args.limit)]
 

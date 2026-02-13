@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -129,17 +130,18 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _sanitize_ip_for_path(client_ip: str) -> str:
-    raw = str(client_ip or "unknown").strip()
-    if not raw:
-        raw = "unknown"
-    sanitized = re.sub(r"[^0-9A-Za-z._-]+", "_", raw).strip("._")
-    return sanitized or "unknown"
+def _record_dirs_for_time_bucket(dt: datetime, *, create: bool = True) -> tuple[str, str, Path, Path, Path]:
+    """
+    Records are bucketed by local date/hour for easier debugging when proxied IPs
+    are ambiguous (e.g. Vercel).
 
-
-def _record_dirs_for_ip(client_ip: str, *, create: bool = True) -> tuple[str, Path, Path, Path]:
-    ip_dir = _sanitize_ip_for_path(client_ip)
-    base_dir = RECORDS_DIR / ip_dir
+    Layout:
+      app/records/YYYY-MM-DD/HH/{images,json,message}/...
+    """
+    dt_local = dt.astimezone()
+    date_dir = dt_local.strftime("%Y-%m-%d")
+    hour_dir = dt_local.strftime("%H")
+    base_dir = RECORDS_DIR / date_dir / hour_dir
     images_dir = base_dir / "images"
     json_dir = base_dir / "json"
     message_dir = base_dir / "message"
@@ -147,7 +149,7 @@ def _record_dirs_for_ip(client_ip: str, *, create: bool = True) -> tuple[str, Pa
         images_dir.mkdir(parents=True, exist_ok=True)
         json_dir.mkdir(parents=True, exist_ok=True)
         message_dir.mkdir(parents=True, exist_ok=True)
-    return ip_dir, images_dir, json_dir, message_dir
+    return date_dir, hour_dir, images_dir, json_dir, message_dir
 
 
 def _check_rate_limit(ip: str) -> None:
@@ -259,44 +261,31 @@ async def _read_valid_image(image: UploadFile) -> tuple[str, bytes, str]:
     return filename, data, detected
 
 
-def _build_record_name(detected: str, client_ip: str) -> tuple[str, str]:
-    # Human-readable datetime format: 2026-02-11_14-30-45
-    dt = datetime.now(timezone.utc)
-    date_str = dt.strftime("%Y-%m-%d_%H-%M-%S")
-
-    _, images_dir, json_dir, _ = _record_dirs_for_ip(client_ip, create=True)
-
-    # Find next sequence number for this datetime within the same IP bucket.
-    prefix = f"{date_str}_"
-    seq = 1
-    for existing_dir in (images_dir, json_dir):
-        if existing_dir.exists():
-            for existing_file in existing_dir.glob(f"{prefix}*"):
-                try:
-                    # Extract sequence number from filename
-                    name_part = existing_file.stem  # filename without extension
-                    seq_part = name_part.split("_")[-1]
-                    if seq_part.isdigit():
-                        seq = max(seq, int(seq_part) + 1)
-                except (IndexError, ValueError):
-                    pass
-
+def _build_record_name(detected: str, *, now: Optional[datetime] = None) -> tuple[str, str, datetime]:
+    """
+    Build a unique record id. We include microseconds + a short random suffix to
+    avoid directory scans for sequence numbers (which become expensive when
+    bucketing by hour across many users).
+    """
+    dt = (now or datetime.now(timezone.utc)).astimezone()
+    date_str = dt.strftime("%Y-%m-%d_%H-%M-%S_%f")
+    suffix = secrets.token_hex(2)  # 4 hex chars
     ext = "jpg" if detected == "jpeg" else detected
-    base = f"{date_str}_{seq:03d}"
-    return base, ext
+    base = f"{date_str}_{suffix}"
+    return base, ext, dt
 
 
-def _persist_image_bytes(base: str, ext: str, data: bytes, client_ip: str) -> tuple[str, str]:
+def _persist_image_bytes(base: str, ext: str, data: bytes, *, record_dt: datetime) -> tuple[str, str]:
     stored_name = f"{base}.{ext}"
-    ip_dir, images_dir, _, _ = _record_dirs_for_ip(client_ip, create=True)
-    # Store once under per-IP records tree (avoid duplicate growth).
+    date_dir, hour_dir, images_dir, _, _ = _record_dirs_for_time_bucket(record_dt, create=True)
     (images_dir / stored_name).write_bytes(data)
-    return stored_name, f"records/{ip_dir}/images/{stored_name}"
+    return stored_name, f"records/{date_dir}/{hour_dir}/images/{stored_name}"
 
 
 def _persist_analyze_record(
     *,
     base: str,
+    record_dt: datetime,
     created_at: str,
     image_rel_path: Optional[str],
     source_filename: str,
@@ -308,11 +297,12 @@ def _persist_analyze_record(
     ui_state: dict,
     rl_result: dict,
 ) -> tuple[str, str]:
-    ip_dir, _, json_dir, _ = _record_dirs_for_ip(client_ip, create=True)
+    date_dir, hour_dir, _, json_dir, _ = _record_dirs_for_time_bucket(record_dt, create=True)
     json_name = f"{base}.json"
     payload = _to_builtin(
         {
             "record_id": base,
+            "record_bucket": {"date": date_dir, "hour": hour_dir},
             "created_at": created_at,
             "source_filename": source_filename,
             "client_ip": client_ip,
@@ -326,7 +316,7 @@ def _persist_analyze_record(
         }
     )
     (json_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return json_name, f"records/{ip_dir}/json/{json_name}"
+    return json_name, f"records/{date_dir}/{hour_dir}/json/{json_name}"
 
 
 def _persist_bug_report(
@@ -336,9 +326,10 @@ def _persist_bug_report(
     record_id: Optional[str],
     user_agent: Optional[str],
 ) -> str:
-    ip_dir, _, _, message_dir = _record_dirs_for_ip(client_ip, create=True)
-    created_at = datetime.now(timezone.utc).isoformat()
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_%f")
+    dt = datetime.now(timezone.utc).astimezone()
+    date_dir, hour_dir, _, _, message_dir = _record_dirs_for_time_bucket(dt, create=True)
+    created_at = dt.isoformat()
+    stamp = dt.strftime("%Y-%m-%d_%H-%M-%S_%f")
     short = hashlib.sha256(f"{client_ip}|{created_at}|{message}".encode("utf-8", errors="ignore")).hexdigest()[:8]
     json_name = f"{stamp}_{short}.json"
     payload = {
@@ -349,7 +340,7 @@ def _persist_bug_report(
         "message": str(message),
     }
     (message_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return f"records/{ip_dir}/message/{json_name}"
+    return f"records/{date_dir}/{hour_dir}/message/{json_name}"
 
 
 def _parse_count(count_text: Optional[str]) -> tuple[Optional[int], Optional[int]]:
@@ -1207,8 +1198,8 @@ async def upload_image(request: Request, image: UploadFile = File(...)) -> dict:
     _check_rate_limit(ip)
 
     filename, data, detected = await _read_valid_image(image)
-    base, ext = _build_record_name(detected, ip)
-    stored_name, stored_rel_path = _persist_image_bytes(base, ext, data, ip)
+    base, ext, record_dt = _build_record_name(detected)
+    stored_name, stored_rel_path = _persist_image_bytes(base, ext, data, record_dt=record_dt)
     digest = hashlib.sha256(data).hexdigest()[:16]
 
     return {
@@ -1334,11 +1325,11 @@ async def analyze_image(
         filename, data, detected = await _read_valid_image(image)
         timings_ms["read_image"] = (time.perf_counter() - t_read0) * 1000.0
 
-    base, ext = _build_record_name(detected, ip)
+    base, ext, record_dt = _build_record_name(detected)
 
     if data:
         t_persist0 = time.perf_counter()
-        _stored_image_name, stored_image_rel_path = _persist_image_bytes(base, ext, data, ip)
+        _stored_image_name, stored_image_rel_path = _persist_image_bytes(base, ext, data, record_dt=record_dt)
         timings_ms["persist_image"] = (time.perf_counter() - t_persist0) * 1000.0
 
         t_decode0 = time.perf_counter()
@@ -1571,10 +1562,11 @@ async def analyze_image(
     except Exception:
         debug["models"]["ocr_gpu"] = None
 
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = record_dt.isoformat()
 
     _record_json_name, record_json_rel_path = _persist_analyze_record(
         base=base,
+        record_dt=record_dt,
         created_at=created_at,
         image_rel_path=stored_image_rel_path,
         source_filename=filename,
