@@ -62,6 +62,24 @@ REPORT_CACHE_MAX_TOTAL_MB = int(os.getenv("GEMMINI_REPORT_CACHE_MAX_TOTAL_MB", "
 REPORT_CACHE_MAX_ENTRY_BYTES = int(os.getenv("GEMMINI_REPORT_CACHE_MAX_ENTRY_BYTES", str(8 * 1024 * 1024)))
 REPORT_ATTACH_MAX_ITEMS = int(os.getenv("GEMMINI_REPORT_ATTACH_MAX_ITEMS", "3"))
 
+HOMOGRAPHY_TEMPLATE_PATH = Path(
+    str(os.getenv("GEMMINI_HOMOGRAPHY_TEMPLATE_PATH", "") or "").strip()
+    or (ROOT_DIR / "test_data" / "images" / "2026-02-12_18-08-29_b1e932_001.png")
+)
+HOMOGRAPHY_ENABLED = str(os.getenv("GEMMINI_HOMOGRAPHY_ENABLED", "1") or "").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+HOMOGRAPHY_NFEATURES = int(os.getenv("GEMMINI_HOMOGRAPHY_NFEATURES", "5000"))
+HOMOGRAPHY_RATIO = float(os.getenv("GEMMINI_HOMOGRAPHY_RATIO", "0.75"))
+HOMOGRAPHY_TOP_N = int(os.getenv("GEMMINI_HOMOGRAPHY_TOP_N", "200"))
+HOMOGRAPHY_MIN_GOOD_MATCHES = int(os.getenv("GEMMINI_HOMOGRAPHY_MIN_GOOD_MATCHES", "30"))
+HOMOGRAPHY_MIN_INLIERS = int(os.getenv("GEMMINI_HOMOGRAPHY_MIN_INLIERS", "40"))
+HOMOGRAPHY_RANSAC_THRESH = float(os.getenv("GEMMINI_HOMOGRAPHY_RANSAC_THRESH", "5.0"))
+HOMOGRAPHY_ROI_PAD_PX = int(os.getenv("GEMMINI_HOMOGRAPHY_ROI_PAD_PX", "6"))
+
 ACTION_NAME = {
     0: "process",
     1: "reroll",
@@ -76,6 +94,9 @@ _runtime_lock = threading.Lock()
 _report_cache_lock = threading.Lock()
 _report_cache_total_bytes = 0
 _report_cache: Dict[str, Deque[dict]] = defaultdict(deque)
+_homography_lock = threading.Lock()
+_homography_runtime = None
+_homography_runtime_error: Optional[str] = None
 
 app = FastAPI(title="Gemmini Web API", version="0.3.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -618,6 +639,165 @@ def _get_parser():
 
         _parser_instance = GameStateParser()
     return _parser_instance
+
+
+class HomographyRoiRuntime:
+    def __init__(self, *, template_path: Path) -> None:
+        from gemmini_vision.detect import ANNOTATION
+
+        self.annotation = ANNOTATION
+        self.template_path = Path(template_path)
+        if not self.template_path.exists():
+            raise FileNotFoundError(f"homography template not found: {self.template_path}")
+
+        ref_bgr = cv2.imread(str(self.template_path), cv2.IMREAD_COLOR)
+        if ref_bgr is None:
+            raise FileNotFoundError(f"homography template unreadable: {self.template_path}")
+
+        self.base_w = int(self.annotation.get("width") or 0)
+        self.base_h = int(self.annotation.get("height") or 0)
+        if self.base_w <= 0 or self.base_h <= 0:
+            raise ValueError("invalid template base size")
+
+        ref_gray = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2GRAY)
+        self.orb = cv2.ORB_create(nfeatures=int(HOMOGRAPHY_NFEATURES))
+        kp, desc = self.orb.detectAndCompute(ref_gray, None)
+        if desc is None or kp is None or len(kp) < 50:
+            raise RuntimeError("homography template has too few features")
+
+        self.ref_kp = kp
+        self.ref_desc = desc
+        self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+
+    @staticmethod
+    def _roi_corners(box: dict) -> np.ndarray:
+        cx = float(box["x"])
+        cy = float(box["y"])
+        bw = float(box["w"])
+        bh = float(box["h"])
+        x1 = cx - bw / 2.0
+        y1 = cy - bh / 2.0
+        x2 = cx + bw / 2.0
+        y2 = cy + bh / 2.0
+        pts = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+        return pts.reshape(-1, 1, 2)
+
+    def extract_rois(self, frame_bgr: np.ndarray) -> tuple[Optional[Dict[str, np.ndarray]], dict]:
+        debug: dict = {
+            "ok": False,
+            "template_path": str(self.template_path),
+            "nfeatures": int(HOMOGRAPHY_NFEATURES),
+        }
+        if not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+            debug["reason"] = "empty_frame"
+            return None, debug
+
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        kp2, des2 = self.orb.detectAndCompute(gray, None)
+        debug["kp_target"] = int(len(kp2) if kp2 is not None else 0)
+        if des2 is None or kp2 is None or len(kp2) < 20:
+            debug["reason"] = "no_target_features"
+            return None, debug
+
+        knn = self.bf.knnMatch(self.ref_desc, des2, k=2)
+        good = []
+        ratio = float(HOMOGRAPHY_RATIO)
+        for m, n in knn:
+            if m.distance < ratio * n.distance:
+                good.append(m)
+        debug["good_matches"] = int(len(good))
+        if len(good) < int(HOMOGRAPHY_MIN_GOOD_MATCHES):
+            debug["reason"] = "few_good_matches"
+            return None, debug
+
+        good = sorted(good, key=lambda m: m.distance)[: int(HOMOGRAPHY_TOP_N)]
+        debug["used_matches"] = int(len(good))
+        src_pts = np.float32([self.ref_kp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, float(HOMOGRAPHY_RANSAC_THRESH))
+        if H is None or mask is None:
+            debug["reason"] = "homography_failed"
+            return None, debug
+
+        inliers = int(mask.ravel().sum())
+        debug["inliers"] = int(inliers)
+        if inliers < int(HOMOGRAPHY_MIN_INLIERS):
+            debug["reason"] = "low_inliers"
+            return None, debug
+
+        # Project the reference frame corners to estimate a content rect in the target frame.
+        try:
+            corners = np.array(
+                [[0, 0], [self.base_w, 0], [self.base_w, self.base_h], [0, self.base_h]],
+                dtype=np.float32,
+            ).reshape(-1, 1, 2)
+            proj = cv2.perspectiveTransform(corners, H)
+            xs = proj[:, 0, 0]
+            ys = proj[:, 0, 1]
+            debug["content_rect"] = {
+                "x1": float(xs.min()),
+                "y1": float(ys.min()),
+                "x2": float(xs.max()),
+                "y2": float(ys.max()),
+            }
+        except Exception:
+            debug["content_rect"] = None
+
+        # Extract each ROI by projecting the reference ROI boxes onto the target frame.
+        rois: Dict[str, np.ndarray] = {}
+        h, w = frame_bgr.shape[:2]
+        pad = int(HOMOGRAPHY_ROI_PAD_PX)
+        for box in list(self.annotation.get("boxes") or []):
+            label = str(box.get("label") or "").strip()
+            if not label:
+                continue
+            pts = self._roi_corners(box)
+            proj = cv2.perspectiveTransform(pts, H)
+            xs = proj[:, 0, 0]
+            ys = proj[:, 0, 1]
+            x1 = int(np.floor(xs.min())) - pad
+            y1 = int(np.floor(ys.min())) - pad
+            x2 = int(np.ceil(xs.max())) + pad
+            y2 = int(np.ceil(ys.max())) + pad
+            x1 = max(0, min(w - 1, x1))
+            y1 = max(0, min(h - 1, y1))
+            x2 = max(0, min(w, x2))
+            y2 = max(0, min(h, y2))
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                continue
+            rois[label] = frame_bgr[y1:y2, x1:x2].copy()
+
+        missing = [x for x in ROI_REQUIRED_LABELS if x not in rois]
+        debug["roi_labels"] = sorted(list(rois.keys()))
+        debug["roi_missing"] = missing
+        if missing:
+            debug["reason"] = "missing_rois"
+            return None, debug
+
+        debug["ok"] = True
+        return rois, debug
+
+
+def _get_homography_runtime() -> tuple[Optional[HomographyRoiRuntime], Optional[str]]:
+    global _homography_runtime, _homography_runtime_error
+    if not HOMOGRAPHY_ENABLED:
+        return None, "disabled"
+    if _homography_runtime is not None:
+        return _homography_runtime, None
+    if _homography_runtime_error is not None:
+        return None, _homography_runtime_error
+
+    with _homography_lock:
+        if _homography_runtime is not None:
+            return _homography_runtime, None
+        if _homography_runtime_error is not None:
+            return None, _homography_runtime_error
+        try:
+            _homography_runtime = HomographyRoiRuntime(template_path=HOMOGRAPHY_TEMPLATE_PATH)
+            return _homography_runtime, None
+        except Exception as e:
+            _homography_runtime_error = f"{type(e).__name__}: {e}"
+            return None, _homography_runtime_error
 
 
 class RLRuntime:
@@ -1652,12 +1832,31 @@ async def analyze_image(
     timings_ms["get_parser"] = (time.perf_counter() - t_parser0) * 1000.0
 
     ocr_mode = "fullframe"
+    homography_debug: Optional[dict] = None
     t_ocr0 = time.perf_counter()
     if has_complete_roi_set:
         ocr_mode = "multi_crop"
         ocr_result = parser.parse_ocr_rois(roi_images)
     else:
-        ocr_result = parser.parse_ocr_result(img)
+        ocr_result = {}
+        if isinstance(img, np.ndarray):
+            hrt, hrt_err = _get_homography_runtime()
+            if hrt is not None:
+                try:
+                    rois2, hdbg = hrt.extract_rois(img)
+                    homography_debug = _to_builtin(hdbg)
+                    if rois2 is not None:
+                        ocr_mode = "fullframe_homography_rois"
+                        ocr_result = parser.parse_ocr_rois(rois2)
+                    else:
+                        ocr_result = parser.parse_ocr_result(img)
+                except Exception as e:
+                    homography_debug = {"ok": False, "reason": "exception", "error": f"{type(e).__name__}: {e}"}
+                    ocr_result = parser.parse_ocr_result(img)
+            else:
+                if hrt_err:
+                    homography_debug = {"ok": False, "reason": "runtime_unavailable", "error": str(hrt_err)}
+                ocr_result = parser.parse_ocr_result(img)
     if not isinstance(ocr_result, dict):
         ocr_result = {}
     timings_ms["ocr_parse"] = (time.perf_counter() - t_ocr0) * 1000.0
@@ -1837,6 +2036,8 @@ async def analyze_image(
         "goal_success": _to_builtin(goal_success_payload),
         "client_debug": _to_builtin(client_debug_payload),
     }
+    if homography_debug is not None:
+        debug["homography"] = _to_builtin(homography_debug)
     if roi_labels and not has_complete_roi_set and image is not None:
         warnings = list(debug.get("warnings") or [])
         missing = sorted(required_roi_labels - roi_labels)
