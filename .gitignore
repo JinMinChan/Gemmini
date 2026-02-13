@@ -16,6 +16,9 @@ app/uploads/
 # Local test/analysis data (keep out of deploy repo)
 test_data/
 
+# Generated debug outputs
+codex/roi_overlay_records/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

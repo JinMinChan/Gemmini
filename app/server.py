@@ -161,18 +161,18 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _record_dirs_for_time_bucket(dt: datetime, *, create: bool = True) -> tuple[str, str, Path, Path, Path]:
+def _record_dirs_for_date_bucket(dt: datetime, *, create: bool = True) -> tuple[str, Path, Path, Path]:
     """
-    Records are bucketed by local date/hour for easier debugging when proxied IPs
-    are ambiguous (e.g. Vercel).
+    Records are bucketed by local date (YYYY-MM-DD). We intentionally avoid
+    an additional hour bucket because it creates too many folders and makes
+    manual inspection harder.
 
     Layout:
-      app/records/YYYY-MM-DD/HH/{images,json,message}/...
+      app/records/YYYY-MM-DD/{images,json,message}/...
     """
     dt_local = dt.astimezone()
     date_dir = dt_local.strftime("%Y-%m-%d")
-    hour_dir = dt_local.strftime("%H")
-    base_dir = RECORDS_DIR / date_dir / hour_dir
+    base_dir = RECORDS_DIR / date_dir
     images_dir = base_dir / "images"
     json_dir = base_dir / "json"
     message_dir = base_dir / "message"
@@ -180,7 +180,7 @@ def _record_dirs_for_time_bucket(dt: datetime, *, create: bool = True) -> tuple[
         images_dir.mkdir(parents=True, exist_ok=True)
         json_dir.mkdir(parents=True, exist_ok=True)
         message_dir.mkdir(parents=True, exist_ok=True)
-    return date_dir, hour_dir, images_dir, json_dir, message_dir
+    return date_dir, images_dir, json_dir, message_dir
 
 
 def _sanitize_rate_key(value: str) -> str:
@@ -394,15 +394,31 @@ def _persist_report_attachments(
 
         # Copy analyze json for convenience (small).
         copied_analyze = None
-        if date_dir and hour_dir and rid:
-            src_abs = RECORDS_DIR / date_dir / hour_dir / "json" / f"{rid}.json"
-            if src_abs.exists():
-                dst_abs = analyze_abs_dir / f"{rid}.json"
-                try:
-                    shutil.copy2(src_abs, dst_abs)
-                    copied_analyze = str((bundle_rel_dir / "analyze_json" / f"{rid}.json").as_posix())
-                except Exception:
-                    copied_analyze = None
+        src_abs: Optional[Path] = None
+        if json_rel_path:
+            try:
+                cand = (BASE_DIR / Path(json_rel_path)).resolve()
+                if RECORDS_DIR in cand.parents or cand == RECORDS_DIR:
+                    src_abs = cand
+            except Exception:
+                src_abs = None
+        if src_abs is None and date_dir and rid:
+            # Prefer the current date-only layout, but fall back to the legacy hour layout.
+            cand = RECORDS_DIR / date_dir / "json" / f"{rid}.json"
+            if cand.exists():
+                src_abs = cand
+            elif hour_dir:
+                cand2 = RECORDS_DIR / date_dir / hour_dir / "json" / f"{rid}.json"
+                if cand2.exists():
+                    src_abs = cand2
+
+        if src_abs is not None and src_abs.exists():
+            dst_abs = analyze_abs_dir / f"{rid}.json"
+            try:
+                shutil.copy2(src_abs, dst_abs)
+                copied_analyze = str((bundle_rel_dir / "analyze_json" / f"{rid}.json").as_posix())
+            except Exception:
+                copied_analyze = None
 
         saved_items.append(
             {
@@ -542,9 +558,9 @@ def _build_record_name(detected: str, *, now: Optional[datetime] = None) -> tupl
 
 def _persist_image_bytes(base: str, ext: str, data: bytes, *, record_dt: datetime) -> tuple[str, str]:
     stored_name = f"{base}.{ext}"
-    date_dir, hour_dir, images_dir, _, _ = _record_dirs_for_time_bucket(record_dt, create=True)
+    date_dir, images_dir, _, _ = _record_dirs_for_date_bucket(record_dt, create=True)
     (images_dir / stored_name).write_bytes(data)
-    return stored_name, f"records/{date_dir}/{hour_dir}/images/{stored_name}"
+    return stored_name, f"records/{date_dir}/images/{stored_name}"
 
 
 def _persist_analyze_record(
@@ -563,12 +579,12 @@ def _persist_analyze_record(
     ui_state: dict,
     rl_result: dict,
 ) -> tuple[str, str]:
-    date_dir, hour_dir, _, json_dir, _ = _record_dirs_for_time_bucket(record_dt, create=True)
+    date_dir, _, json_dir, _ = _record_dirs_for_date_bucket(record_dt, create=True)
     json_name = f"{base}.json"
     payload = _to_builtin(
         {
             "record_id": base,
-            "record_bucket": {"date": date_dir, "hour": hour_dir},
+            "record_bucket": {"date": date_dir},
             "created_at": created_at,
             "source_filename": source_filename,
             "client_ip": client_ip,
@@ -583,7 +599,7 @@ def _persist_analyze_record(
         }
     )
     (json_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return json_name, f"records/{date_dir}/{hour_dir}/json/{json_name}"
+    return json_name, f"records/{date_dir}/json/{json_name}"
 
 
 def _persist_bug_report(
@@ -595,7 +611,7 @@ def _persist_bug_report(
     user_agent: Optional[str],
 ) -> str:
     dt = datetime.now(timezone.utc).astimezone()
-    date_dir, hour_dir, _, _, message_dir = _record_dirs_for_time_bucket(dt, create=True)
+    date_dir, _, _, message_dir = _record_dirs_for_date_bucket(dt, create=True)
     created_at = dt.isoformat()
     stamp = dt.strftime("%Y-%m-%d_%H-%M-%S_%f")
     short = hashlib.sha256(f"{client_ip}|{created_at}|{message}".encode("utf-8", errors="ignore")).hexdigest()[:8]
@@ -609,7 +625,7 @@ def _persist_bug_report(
         "message": str(message),
     }
     (message_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return f"records/{date_dir}/{hour_dir}/message/{json_name}"
+    return f"records/{date_dir}/message/{json_name}"
 
 
 def _parse_count(count_text: Optional[str]) -> tuple[Optional[int], Optional[int]]:
@@ -2090,7 +2106,7 @@ async def analyze_image(
     )
 
     try:
-        date_dir, hour_dir, _images_dir, _json_dir, _message_dir = _record_dirs_for_time_bucket(record_dt, create=False)
+        date_dir, _images_dir, _json_dir, _message_dir = _record_dirs_for_date_bucket(record_dt, create=False)
         roi_bytes = 0
         rois_to_cache: Dict[str, dict] = {}
         for label, blob in (roi_raw or {}).items():
@@ -2110,7 +2126,7 @@ async def analyze_image(
             client_id=client_id,
             entry={
                 "record_id": base,
-                "record_bucket": {"date": date_dir, "hour": hour_dir},
+                "record_bucket": {"date": date_dir},
                 "json_path": record_json_rel_path,
                 "image_path": stored_image_rel_path,
                 "ocr_mode": ocr_mode,
