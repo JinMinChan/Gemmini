@@ -932,39 +932,82 @@
       });
     }
 
-    function scaledRoiRect(box, srcW, srcH) {
-      const scaleX = srcW / ROI_BASE_WIDTH;
-      const scaleY = srcH / ROI_BASE_HEIGHT;
-      const cx = box.x * scaleX;
-      const cy = box.y * scaleY;
-      const bw = Math.max(1, Math.round(box.w * scaleX));
-      const bh = Math.max(1, Math.round(box.h * scaleY));
+	    function scaledRoiRect(box, srcW, srcH) {
+        // If the captured video is not the same aspect ratio as the ROI schema
+        // (e.g. 21:9 ultrawide), the game UI is typically centered with extra
+        // horizontal content. Map ROI coordinates onto the centered base-aspect
+        // content rect instead of stretching across the full frame.
+        const baseAspect = ROI_BASE_WIDTH / ROI_BASE_HEIGHT;
+        const srcAspect = srcW / srcH;
+        const eps = 0.02; // tolerate small rounding differences
+        let contentX = 0;
+        let contentY = 0;
+        let contentW = srcW;
+        let contentH = srcH;
+        let letterboxMode = "direct";
+        if (Number.isFinite(srcAspect) && srcAspect > 0 && Math.abs(srcAspect - baseAspect) > eps) {
+          if (srcAspect > baseAspect) {
+            // wider than base -> crop horizontally (use centered 16:9 region)
+            contentW = Math.max(1, Math.round(srcH * baseAspect));
+            contentH = srcH;
+            contentX = Math.max(0, Math.round((srcW - contentW) / 2));
+            contentY = 0;
+            letterboxMode = "crop_x";
+          } else {
+            // taller than base -> crop vertically
+            contentW = srcW;
+            contentH = Math.max(1, Math.round(srcW / baseAspect));
+            contentX = 0;
+            contentY = Math.max(0, Math.round((srcH - contentH) / 2));
+            letterboxMode = "crop_y";
+          }
+        }
+
+	      const scaleX = contentW / ROI_BASE_WIDTH;
+	      const scaleY = contentH / ROI_BASE_HEIGHT;
+	      const cx = contentX + box.x * scaleX;
+	      const cy = contentY + box.y * scaleY;
+	      const bw = Math.max(1, Math.round(box.w * scaleX));
+	      const bh = Math.max(1, Math.round(box.h * scaleY));
 
       const x1 = Math.max(0, Math.floor(cx - bw / 2));
       const y1 = Math.max(0, Math.floor(cy - bh / 2));
       const x2 = Math.min(srcW, Math.ceil(cx + bw / 2));
       const y2 = Math.min(srcH, Math.ceil(cy + bh / 2));
 
-      return {
-        x: x1,
-        y: y1,
-        w: Math.max(1, x2 - x1),
-        h: Math.max(1, y2 - y1),
-      };
-    }
+	      return {
+	        x: x1,
+	        y: y1,
+	        w: Math.max(1, x2 - x1),
+	        h: Math.max(1, y2 - y1),
+          letterbox: {
+            mode: letterboxMode,
+            content_x: contentX,
+            content_y: contentY,
+            content_w: contentW,
+            content_h: contentH,
+            src_aspect: Math.round((srcAspect || 0) * 1000) / 1000,
+            base_aspect: Math.round(baseAspect * 1000) / 1000,
+          },
+	      };
+	    }
 
-    async function captureMultiCropPayload() {
+	    async function captureMultiCropPayload() {
       if (!screenVideo.videoWidth || !screenVideo.videoHeight) {
         throw new Error("No screen frame available.");
       }
-      const srcW = screenVideo.videoWidth;
-      const srcH = screenVideo.videoHeight;
-      const rois = [];
-      for (const box of ROI_BOXES) {
-        const rect = scaledRoiRect(box, srcW, srcH);
-        if (rect.w < 8 || rect.h < 8) {
-          throw new Error(`ROI too small: ${box.label}`);
-        }
+	      const srcW = screenVideo.videoWidth;
+	      const srcH = screenVideo.videoHeight;
+	      const rois = [];
+        let letterbox = null;
+	      for (const box of ROI_BOXES) {
+	        const rect = scaledRoiRect(box, srcW, srcH);
+          if (!letterbox && rect.letterbox) {
+            letterbox = rect.letterbox;
+          }
+	        if (rect.w < 8 || rect.h < 8) {
+	          throw new Error(`ROI too small: ${box.label}`);
+	        }
         const canvas = document.createElement("canvas");
         canvas.width = rect.w;
         canvas.height = rect.h;
@@ -985,11 +1028,11 @@
           rect.w,
           rect.h
         );
-        const blob = await canvasToBlob(canvas, "image/png");
-        rois.push({ label: box.label, rect, blob });
-      }
-      return { source_w: srcW, source_h: srcH, rois };
-    }
+	        const blob = await canvasToBlob(canvas, "image/png");
+	        rois.push({ label: box.label, rect, blob });
+	      }
+	      return { source_w: srcW, source_h: srcH, letterbox, rois };
+	    }
 
     function captureVideoFrameBlob() {
       return new Promise(async (resolve, reject) => {
@@ -1036,117 +1079,190 @@
       });
     }
 
-	    async function analyzeCapture() {
-	      if (!state.stream) {
-	        return;
-	      }
-		      analyzeBtn.disabled = true;
-		      state.successProb = null;
-		      state.lastError = null;
+		    async function analyzeCapture() {
+		      if (!state.stream) {
+		        return;
+		      }
+			      analyzeBtn.disabled = true;
+			      state.successProb = null;
+			      state.lastError = null;
 
-		      try {
-		        const tCapture0 = performance.now();
-		        const formData = new FormData();
-            if (state.clientId) {
-              formData.append("client_id", String(state.clientId));
-            }
-		        let captureMode = CAPTURE_PIPELINE;
-		        let roiSchemaVersion = ROI_SCHEMA_VERSION;
-		        let capture = null;
-		        let blob = null;
-	        let uploadBytes = 0;
-	        let roiLabels = [];
-	        let roiCount = 0;
-	        let roiRects = [];
-	        try {
-	          capture = await captureMultiCropPayload();
-	          const ts = Date.now();
-	          for (const roi of capture.rois) {
-	            formData.append(`roi_${roi.label}`, roi.blob, `${roi.label}_${ts}.png`);
-	            uploadBytes += roi.blob?.size || 0;
-	            roiLabels.push(roi.label);
-	            roiRects.push({
-	              label: roi.label,
-	              w: roi.rect.w,
-	              h: roi.rect.h,
-	              bytes: roi.blob?.size || 0,
-	            });
-	          }
-	          roiCount = capture.rois.length;
-	        } catch (_multiCropErr) {
-	          captureMode = FALLBACK_CAPTURE_PIPELINE;
-	          roiSchemaVersion = FALLBACK_ROI_SCHEMA_VERSION;
-	          capture = await captureVideoFrameBlob();
-	          blob = capture.blob;
-	          const fileName = `capture_${Date.now()}.jpg`;
-	          formData.append("image", blob, fileName);
-	          uploadBytes = blob?.size || 0;
-	        }
-	        const tCapture1 = performance.now();
-	        formData.append("willpower", String(state.current.willpower));
-        formData.append("points", String(state.current.points));
-        formData.append("effect1_level", String(state.current.effect1_level));
-        formData.append("effect2_level", String(state.current.effect2_level));
-		        formData.append("target_willpower", String(state.target.willpower));
-		        formData.append("target_points", String(state.target.points));
-	        formData.append("target_effect1_level", String(state.target.effect1_level));
-	        formData.append("target_effect2_level", String(state.target.effect2_level));
-            formData.append("role", String(state.uiState?.role || "dealer"));
-            formData.append("gem_type", String(state.uiState?.gem_type || "stable"));
-            formData.append("roi_schema_version", roiSchemaVersion);
-		        formData.append(
-		          "client_debug",
-		          JSON.stringify({
-		            capture_ms: Math.round((tCapture1 - tCapture0) * 100) / 100,
-                capture_pipeline: captureMode,
-                roi_schema_version: roiSchemaVersion,
-	            video_w: capture.source_w || screenVideo.videoWidth || null,
-	            video_h: capture.source_h || screenVideo.videoHeight || null,
-	            upload_w: capture.upload_w || null,
-	            upload_h: capture.upload_h || null,
-	            upload_bytes: uploadBytes || null,
-	            jpeg_quality: capture.jpeg_quality || null,
-                roi_count: roiCount,
-                roi_labels: roiLabels,
-                roi_rects: roiRects,
-	          })
-	        );
+			      try {
+			        const tCapture0 = performance.now();
+			        const formData = new FormData();
+	            if (state.clientId) {
+	              formData.append("client_id", String(state.clientId));
+	            }
+			        let captureMode = CAPTURE_PIPELINE;
+			        let roiSchemaVersion = ROI_SCHEMA_VERSION;
+			        let capture = null;
+			        let blob = null;
+		        let uploadBytes = 0;
+		        let roiLabels = [];
+		        let roiCount = 0;
+		        let roiRects = [];
+		        try {
+		          capture = await captureMultiCropPayload();
+		          const ts = Date.now();
+		          for (const roi of capture.rois) {
+		            formData.append(`roi_${roi.label}`, roi.blob, `${roi.label}_${ts}.png`);
+		            uploadBytes += roi.blob?.size || 0;
+		            roiLabels.push(roi.label);
+		            roiRects.push({
+		              label: roi.label,
+		              w: roi.rect.w,
+		              h: roi.rect.h,
+		              bytes: roi.blob?.size || 0,
+		            });
+		          }
+		          roiCount = capture.rois.length;
+		        } catch (_multiCropErr) {
+		          captureMode = FALLBACK_CAPTURE_PIPELINE;
+		          roiSchemaVersion = FALLBACK_ROI_SCHEMA_VERSION;
+		          capture = await captureVideoFrameBlob();
+		          blob = capture.blob;
+		          const fileName = `capture_${Date.now()}.jpg`;
+		          formData.append("image", blob, fileName);
+		          uploadBytes = blob?.size || 0;
+		        }
+			        const tCapture1 = performance.now();
+			        formData.append("willpower", String(state.current.willpower));
+	        formData.append("points", String(state.current.points));
+	        formData.append("effect1_level", String(state.current.effect1_level));
+	        formData.append("effect2_level", String(state.current.effect2_level));
+			        formData.append("target_willpower", String(state.target.willpower));
+			        formData.append("target_points", String(state.target.points));
+		        formData.append("target_effect1_level", String(state.target.effect1_level));
+		        formData.append("target_effect2_level", String(state.target.effect2_level));
+	            formData.append("role", String(state.uiState?.role || "dealer"));
+	            formData.append("gem_type", String(state.uiState?.gem_type || "stable"));
+	            formData.append("roi_schema_version", roiSchemaVersion);
+			        formData.append(
+			          "client_debug",
+			          JSON.stringify({
+			            capture_ms: Math.round((tCapture1 - tCapture0) * 100) / 100,
+	                capture_pipeline: captureMode,
+	                roi_schema_version: roiSchemaVersion,
+		            video_w: capture.source_w || screenVideo.videoWidth || null,
+		            video_h: capture.source_h || screenVideo.videoHeight || null,
+		            upload_w: capture.upload_w || null,
+		            upload_h: capture.upload_h || null,
+		            upload_bytes: uploadBytes || null,
+		            jpeg_quality: capture.jpeg_quality || null,
+		            letterbox: capture.letterbox || null,
+	                roi_count: roiCount,
+	                roi_labels: roiLabels,
+	                roi_rects: roiRects,
+		          })
+		        );
 
-		        const res = await fetch("/api/analyze", {
-		          method: "POST",
-		          body: formData,
-	        });
-	        const body = await res.json().catch(() => ({}));
-	        if (!res.ok || !body.ok) {
-	          const detail = body?.detail || body?.error || (Object.keys(body || {}).length ? JSON.stringify(body) : "");
-	          const suffix = detail ? `: ${detail}` : (res.statusText ? `: ${res.statusText}` : "");
-	          throw new Error(`분석 실패 (HTTP ${res.status})${suffix}`);
-	        }
+			        const res = await fetch("/api/analyze", {
+			          method: "POST",
+			          body: formData,
+		        });
+		        const body1 = await res.json().catch(() => ({}));
+		        if (!res.ok || !body1.ok) {
+		          const detail =
+		            body1?.detail || body1?.error || (Object.keys(body1 || {}).length ? JSON.stringify(body1) : "");
+		          const suffix = detail ? `: ${detail}` : (res.statusText ? `: ${res.statusText}` : "");
+		          throw new Error(`분석 실패 (HTTP ${res.status})${suffix}`);
+		        }
 
-	        state.lastResponse = body;
-	        state.successProb = body.goal_success?.success_prob ?? null;
-	        const gs = body.goal_success ?? null;
-	        if (!gs) {
-	          state.lastError = "서버 응답에 성공 확률(goal_success)이 없습니다. 서버를 재시작/업데이트해주세요.";
-	        } else if (gs.success_prob == null) {
-	          const reason = gs.reason ? String(gs.reason) : "unknown";
-	          const errText = gs.error ? `: ${String(gs.error)}` : "";
-	          state.lastError = `성공 확률 계산 실패 (${reason}${errText})`;
+		        let body = body1;
+		        let didRetry = false;
+		        const countText1 = body1?.ocr_result?.count;
+		        const hasCount1 = typeof countText1 === "string" && countText1.includes("/");
+		        if (captureMode === CAPTURE_PIPELINE && !hasCount1) {
+		          didRetry = true;
+		          const tRetry0 = performance.now();
+		          const retryForm = new FormData();
+		          if (state.clientId) {
+		            retryForm.append("client_id", String(state.clientId));
+		          }
+		          const retryCapture = await captureVideoFrameBlob();
+		          const retryBlob = retryCapture.blob;
+		          const retryFileName = `capture_retry_${Date.now()}.jpg`;
+		          retryForm.append("image", retryBlob, retryFileName);
+		          const tRetry1 = performance.now();
+		          retryForm.append("willpower", String(state.current.willpower));
+		          retryForm.append("points", String(state.current.points));
+		          retryForm.append("effect1_level", String(state.current.effect1_level));
+		          retryForm.append("effect2_level", String(state.current.effect2_level));
+		          retryForm.append("target_willpower", String(state.target.willpower));
+		          retryForm.append("target_points", String(state.target.points));
+		          retryForm.append("target_effect1_level", String(state.target.effect1_level));
+		          retryForm.append("target_effect2_level", String(state.target.effect2_level));
+		          retryForm.append("role", String(state.uiState?.role || "dealer"));
+		          retryForm.append("gem_type", String(state.uiState?.gem_type || "stable"));
+		          retryForm.append("roi_schema_version", FALLBACK_ROI_SCHEMA_VERSION);
+		          retryForm.append(
+		            "client_debug",
+		            JSON.stringify({
+		              capture_ms: Math.round((tRetry1 - tRetry0) * 100) / 100,
+		              capture_pipeline: FALLBACK_CAPTURE_PIPELINE,
+		              roi_schema_version: FALLBACK_ROI_SCHEMA_VERSION,
+		              video_w: retryCapture.source_w || screenVideo.videoWidth || null,
+		              video_h: retryCapture.source_h || screenVideo.videoHeight || null,
+		              upload_w: retryCapture.upload_w || null,
+		              upload_h: retryCapture.upload_h || null,
+		              upload_bytes: retryBlob?.size || null,
+		              jpeg_quality: retryCapture.jpeg_quality || null,
+		              auto_retry: true,
+		              retry_reason: "missing_count",
+		              retry_of: body1?.record?.id || null,
+		              first_capture_pipeline: captureMode,
+		              first_roi_schema_version: roiSchemaVersion,
+		              first_letterbox: capture?.letterbox || null,
+		            })
+		          );
+
+		          const res2 = await fetch("/api/analyze", {
+		            method: "POST",
+		            body: retryForm,
+		          });
+		          const body2 = await res2.json().catch(() => ({}));
+		          if (!res2.ok || !body2.ok) {
+		            const detail =
+		              body2?.detail || body2?.error || (Object.keys(body2 || {}).length ? JSON.stringify(body2) : "");
+		            const suffix = detail ? `: ${detail}` : (res2.statusText ? `: ${res2.statusText}` : "");
+		            throw new Error(`분석 재시도 실패 (HTTP ${res2.status})${suffix}`);
+		          }
+		          body = body2;
+		        }
+
+		        state.lastResponse = body;
+		        state.successProb = body.goal_success?.success_prob ?? null;
+		        const gs = body.goal_success ?? null;
+		        if (!gs) {
+		          state.lastError = "서버 응답에 성공 확률(goal_success)이 없습니다. 서버를 재시작/업데이트해주세요.";
+		        } else if (gs.success_prob == null) {
+		          const reason = gs.reason ? String(gs.reason) : "unknown";
+		          const errText = gs.error ? `: ${String(gs.error)}` : "";
+		          state.lastError = `성공 확률 계산 실패 (${reason}${errText})`;
+		        }
+			        state.uiState = {
+			          rerolls: asInt(body.ui_state?.rerolls, 0),
+			          attempts_left: asInt(body.ui_state?.attempts_left, 0),
+			          cost_state: asInt(body.ui_state?.cost_state, 0),
+		          options: Array.isArray(body.ui_state?.options) ? body.ui_state.options : [],
+	            role: String(body.ui_state?.role || state.uiState?.role || "dealer"),
+	            gem_type: String(body.ui_state?.gem_type || state.uiState?.gem_type || "stable"),
+		        };
+	        state.ocrCount = body.ocr_result?.count || null;
+
+	        const finalCountText = body?.ocr_result?.count;
+	        const hasFinalCount = typeof finalCountText === "string" && finalCountText.includes("/");
+	        if (!hasFinalCount && !state.lastError) {
+	          const hint = didRetry
+	            ? "전체 화면으로 재시도했지만 가공 횟수(count) 인식에 실패했습니다."
+	            : "가공 횟수(count) 인식에 실패했습니다.";
+	          state.lastError = `${hint} (21:9 화면공유/해상도/UI 스케일을 확인해주세요)`;
 	        }
-		        state.uiState = {
-		          rerolls: asInt(body.ui_state?.rerolls, 0),
-		          attempts_left: asInt(body.ui_state?.attempts_left, 0),
-		          cost_state: asInt(body.ui_state?.cost_state, 0),
-	          options: Array.isArray(body.ui_state?.options) ? body.ui_state.options : [],
-            role: String(body.ui_state?.role || state.uiState?.role || "dealer"),
-            gem_type: String(body.ui_state?.gem_type || state.uiState?.gem_type || "stable"),
-	        };
-        state.ocrCount = body.ocr_result?.count || null;
-	      } catch (err) {
-	        let msg = err && typeof err === "object" && "message" in err ? String(err.message || err) : String(err);
-	        if (msg.includes("No screen frame available")) {
-	          msg = "공유 화면 프레임이 없습니다. 화면 공유를 다시 시작해주세요.";
-	        } else if (msg.includes("Failed to capture frame blob")) {
+		      } catch (err) {
+		        let msg = err && typeof err === "object" && "message" in err ? String(err.message || err) : String(err);
+		        if (msg.includes("No screen frame available")) {
+		          msg = "공유 화면 프레임이 없습니다. 화면 공유를 다시 시작해주세요.";
+		        } else if (msg.includes("Failed to capture frame blob")) {
 	          msg = "캡처 프레임 생성에 실패했습니다. 화면 공유를 다시 시작해주세요.";
 	        } else if (msg.includes("Failed to fetch")) {
 	          msg = "서버 연결에 실패했습니다. 서버가 실행 중인지 확인해주세요.";
