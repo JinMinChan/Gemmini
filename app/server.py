@@ -40,6 +40,7 @@ GOAL_SUCCESS_MODEL_PATH_FALLBACK = ROOT_DIR / "goal_success" / "runs" / "dist625
 GOAL_SUCCESS_MC_ROLLOUTS = int(os.getenv("GEMMINI_GOAL_MC_ROLLOUTS", "256"))
 PROXY_SHARED_SECRET = str(os.getenv("GEMMINI_PROXY_SHARED_SECRET", "") or "").strip()
 PROXY_SHARED_SECRET_HEADER = "x-gemmini-key"
+PROXY_CLIENT_IP_HEADER = "x-gemmini-client-ip"
 DEFAULT_ROI_SCHEMA_VERSION = "screen_v1"
 MULTICROP_ROI_SCHEMA_VERSION = "screen_v2_multicrop"
 SUPPORTED_ROI_SCHEMA_VERSIONS = {DEFAULT_ROI_SCHEMA_VERSION, MULTICROP_ROI_SCHEMA_VERSION}
@@ -112,6 +113,13 @@ def _to_builtin(value: Any) -> Any:
 
 
 def _client_ip(request: Request) -> str:
+    # When deployed behind a trusted proxy (e.g., Vercel), the proxy should pass
+    # the original client IP via a dedicated header. We only trust this when the
+    # shared-secret mode is enabled, otherwise anyone could spoof it.
+    if PROXY_SHARED_SECRET:
+        raw = str(request.headers.get(PROXY_CLIENT_IP_HEADER, "") or "").strip()
+        if raw:
+            return raw.split(",")[0].strip()
     xff = request.headers.get("x-forwarded-for", "").strip()
     if xff:
         return xff.split(",")[0].strip()
