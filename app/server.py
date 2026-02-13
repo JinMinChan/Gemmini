@@ -52,8 +52,8 @@ MAX_UPLOAD_BYTES = 12 * 1024 * 1024  # 12MB
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
-RATE_LIMIT_WINDOW_SECONDS = 60
-RATE_LIMIT_MAX_REQUESTS = 20
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("GEMMINI_RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("GEMMINI_RATE_LIMIT_MAX_REQUESTS", "20"))
 
 ACTION_NAME = {
     0: "process",
@@ -61,7 +61,7 @@ ACTION_NAME = {
     2: "stop",
 }
 
-_requests_by_ip: Dict[str, Deque[float]] = defaultdict(deque)
+_requests_by_key: Dict[str, Deque[float]] = defaultdict(deque)
 _parser_instance = None
 _rl_runtime = None
 _goal_success_runtime = None
@@ -152,9 +152,25 @@ def _record_dirs_for_time_bucket(dt: datetime, *, create: bool = True) -> tuple[
     return date_dir, hour_dir, images_dir, json_dir, message_dir
 
 
-def _check_rate_limit(ip: str) -> None:
+def _sanitize_rate_key(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    sanitized = re.sub(r"[^0-9A-Za-z._:-]+", "_", raw).strip("._:-")
+    return sanitized[:80]
+
+
+def _rate_limit_key(*, client_ip: str, client_id: Optional[str]) -> str:
+    cid = _sanitize_rate_key(client_id) if client_id else ""
+    if cid:
+        return f"cid:{cid}"
+    ip = _sanitize_rate_key(client_ip) or "unknown"
+    return f"ip:{ip}"
+
+
+def _check_rate_limit(key: str) -> None:
     now = time.time()
-    bucket = _requests_by_ip[ip]
+    bucket = _requests_by_key[key]
     while bucket and (now - bucket[0] > RATE_LIMIT_WINDOW_SECONDS):
         bucket.popleft()
     if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
@@ -290,6 +306,7 @@ def _persist_analyze_record(
     image_rel_path: Optional[str],
     source_filename: str,
     client_ip: str,
+    client_id: Optional[str],
     elapsed_ms: float,
     manual_stats: dict,
     goal_success: Optional[dict],
@@ -306,6 +323,7 @@ def _persist_analyze_record(
             "created_at": created_at,
             "source_filename": source_filename,
             "client_ip": client_ip,
+            "client_id": client_id,
             "elapsed_ms": round(float(elapsed_ms), 2),
             "stored_image": image_rel_path,
             "manual_stats": manual_stats,
@@ -322,6 +340,7 @@ def _persist_analyze_record(
 def _persist_bug_report(
     *,
     client_ip: str,
+    client_id: Optional[str],
     message: str,
     record_id: Optional[str],
     user_agent: Optional[str],
@@ -336,6 +355,7 @@ def _persist_bug_report(
         "created_at": created_at,
         "record_id": str(record_id or "").strip() or None,
         "client_ip": str(client_ip),
+        "client_id": str(client_id) if client_id else None,
         "user_agent": str(user_agent or ""),
         "message": str(message),
     }
@@ -1171,10 +1191,12 @@ async def submit_report(
     request: Request,
     message: str = Form(...),
     record_id: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
 ) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
-    _check_rate_limit(ip)
+    rate_key = _rate_limit_key(client_ip=ip, client_id=client_id)
+    _check_rate_limit(rate_key)
 
     text = str(message or "").strip()
     if not text:
@@ -1184,6 +1206,7 @@ async def submit_report(
 
     rel_path = _persist_bug_report(
         client_ip=ip,
+        client_id=_sanitize_rate_key(client_id) or None,
         message=text,
         record_id=record_id,
         user_agent=request.headers.get("user-agent"),
@@ -1192,10 +1215,15 @@ async def submit_report(
 
 
 @app.post("/api/upload")
-async def upload_image(request: Request, image: UploadFile = File(...)) -> dict:
+async def upload_image(
+    request: Request,
+    image: UploadFile = File(...),
+    client_id: Optional[str] = Form(None),
+) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
-    _check_rate_limit(ip)
+    rate_key = _rate_limit_key(client_ip=ip, client_id=client_id)
+    _check_rate_limit(rate_key)
 
     filename, data, detected = await _read_valid_image(image)
     base, ext, record_dt = _build_record_name(detected)
@@ -1235,11 +1263,13 @@ async def analyze_image(
     role: Optional[str] = Form(None),
     gem_type: Optional[str] = Form(None),
     roi_schema_version: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
     client_debug: Optional[str] = Form(None),
 ) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
-    _check_rate_limit(ip)
+    rate_key = _rate_limit_key(client_ip=ip, client_id=client_id)
+    _check_rate_limit(rate_key)
 
     t_total0 = time.perf_counter()
     timings_ms: dict[str, float] = {}
@@ -1571,6 +1601,7 @@ async def analyze_image(
         image_rel_path=stored_image_rel_path,
         source_filename=filename,
         client_ip=ip,
+        client_id=_sanitize_rate_key(client_id) or None,
         elapsed_ms=elapsed_ms,
         manual_stats=manual_stats,
         goal_success=goal_success_payload,

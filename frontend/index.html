@@ -503,13 +503,14 @@
           };
         }
 
-		    const state = {
-		      stream: null,
-	      current: {
-	        willpower: 1,
-	        points: 1,
-	        effect1_level: 1,
-	        effect2_level: 1,
+			    const state = {
+			      stream: null,
+            clientId: null,
+		      current: {
+		        willpower: 1,
+		        points: 1,
+		        effect1_level: 1,
+		        effect2_level: 1,
 	      },
 		      target: {
 		        willpower: 4,
@@ -520,9 +521,32 @@
 		      uiState: makeDefaultUiState(),
 		      ocrCount: null,
 			      lastResponse: null,
-			      successProb: null,
-			      lastError: null,
-			    };
+				      successProb: null,
+				      lastError: null,
+				    };
+
+          const CLIENT_ID_STORAGE_KEY = "gemmini_client_id";
+
+          function getOrCreateClientId() {
+            try {
+              const existing = String(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY) || "").trim();
+              if (existing && /^[0-9A-Za-z._-]{6,80}$/.test(existing)) {
+                return existing;
+              }
+              const raw =
+                (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+                  ? globalThis.crypto.randomUUID()
+                  : `${Date.now()}_${Math.random().toString(16).slice(2)}`) || "";
+              const sanitized = raw.replace(/[^0-9A-Za-z._-]+/g, "_").replace(/^[_\\.]+|[_\\.]+$/g, "").slice(0, 64);
+              const finalId = sanitized || `c_${Math.random().toString(16).slice(2, 10)}`;
+              window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, finalId);
+              return finalId;
+            } catch (_err) {
+              return null;
+            }
+          }
+
+          state.clientId = getOrCreateClientId();
 
 		    function resetGemState() {
 		      state.current = {
@@ -766,13 +790,16 @@
 
 	      bugReportSendBtn.disabled = true;
 	      setBugReportStatus("전송 중...", "info");
-	      try {
-	        const fd = new FormData();
-	        fd.append("message", message);
-	        const recordId = state.lastResponse?.record?.id;
-	        if (recordId) {
-	          fd.append("record_id", String(recordId));
-	        }
+		      try {
+		        const fd = new FormData();
+		        fd.append("message", message);
+            if (state.clientId) {
+              fd.append("client_id", String(state.clientId));
+            }
+		        const recordId = state.lastResponse?.record?.id;
+		        if (recordId) {
+		          fd.append("record_id", String(recordId));
+		        }
 	        const res = await fetch("/api/report", {
 	          method: "POST",
 	          body: fd,
@@ -1018,12 +1045,15 @@
 		      state.lastError = null;
 
 		      try {
-	        const tCapture0 = performance.now();
-	        const formData = new FormData();
-	        let captureMode = CAPTURE_PIPELINE;
-	        let roiSchemaVersion = ROI_SCHEMA_VERSION;
-	        let capture = null;
-	        let blob = null;
+		        const tCapture0 = performance.now();
+		        const formData = new FormData();
+            if (state.clientId) {
+              formData.append("client_id", String(state.clientId));
+            }
+		        let captureMode = CAPTURE_PIPELINE;
+		        let roiSchemaVersion = ROI_SCHEMA_VERSION;
+		        let capture = null;
+		        let blob = null;
 	        let uploadBytes = 0;
 	        let roiLabels = [];
 	        let roiCount = 0;
