@@ -189,6 +189,80 @@ class GameStateParser:
             import traceback
             traceback.print_exc()
             return {}
+
+    def parse_ocr_rois(self, roi_map):
+        """
+        라벨별 ROI 이미지를 직접 받아 OCR 결과를 추출한다.
+        roi_map: dict[label -> np.ndarray(BGR)]
+        Returns: dict with keys: options, possible, cost, count
+        """
+        try:
+            results = {}
+            if not isinstance(roi_map, dict):
+                return results
+
+            labels = ["option1", "option2", "option3", "option4", "possible", "cost", "count"]
+            for label in labels:
+                roi = roi_map.get(label)
+                if roi is None:
+                    continue
+                if not isinstance(roi, np.ndarray):
+                    continue
+                if roi.size == 0 or roi.shape[0] < 10 or roi.shape[1] < 10:
+                    continue
+
+                try:
+                    if label.startswith("option"):
+                        option_info = detect_option(roi)
+                        results.setdefault("options", []).append(option_info)
+                        continue
+
+                    if label == "possible":
+                        num_roi = roi
+                        try:
+                            h, w = roi.shape[:2]
+                            x1 = int(w * 0.30)
+                            x2 = int(w * 0.50)
+                            y1 = int(h * 0.10)
+                            y2 = int(h * 0.95)
+                            if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
+                                num_roi = roi[y1:y2, x1:x2]
+                        except Exception:
+                            num_roi = roi
+                        raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
+                        results["possible"] = normalize_possible(raw)
+                        continue
+
+                    if label == "cost":
+                        raw = read_numeric_text_with_fallback(roi, allowlist="0189")
+                        results["cost"] = normalize_cost(raw)
+                        continue
+
+                    if label == "count":
+                        raw = read_numeric_text_with_fallback(roi, allowlist="0123456789/", expected_len=3)
+                        results["count"] = normalize_count(raw)
+                        continue
+                except Exception:
+                    continue
+
+            # 시작 상태에서는 possible을 count 기준으로 고정
+            count_text = results.get("count")
+            if isinstance(count_text, str) and "/" in count_text:
+                try:
+                    left_str, right_str = count_text.split("/", 1)
+                    left = int(left_str)
+                    right = int(right_str)
+                    if left == right == 7:
+                        results["possible"] = 1
+                    elif left == right == 9:
+                        results["possible"] = 2
+                except Exception:
+                    pass
+
+            self.last_ocr_result = results
+            return results
+        except Exception:
+            return {}
     
     def convert_to_ui_state(self, ocr_result):
         """

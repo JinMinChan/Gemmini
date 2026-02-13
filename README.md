@@ -19,7 +19,25 @@
 - 서버 실행에 필요한 Python 의존성 단일 목록입니다.
 - 웹 프레임워크(FastAPI/Uvicorn), OCR(OpenCV/EasyOCR), RL 추론(Torch/SB3) 의존성이 모두 포함되어 있습니다.
 
-## 2. API 계층 (`app/`)
+### `vercel.json`
+- Vercel 배포 시 루트(`/`)를 `app/static/index.html`로 연결하는 라우팅 설정입니다.
+- 정적 캐시가 과도하게 남지 않도록 `Cache-Control: no-store` 정책을 포함합니다.
+
+## 2. Vercel 프록시 계층 (`api/`)
+
+### `api/analyze.js`
+- Vercel Edge Function입니다.
+- 브라우저 multipart 요청을 AI 서버의 `/api/analyze`로 전달합니다.
+- `API_SHARED_SECRET`가 있으면 `x-gemmini-key` 헤더를 붙여 인증합니다.
+
+### `api/report.js`
+- Vercel Edge Function입니다.
+- 사용자 제보를 AI 서버의 `/api/report`로 전달합니다.
+
+### `api/health.js`
+- Vercel 레이어 헬스체크용 경량 엔드포인트입니다.
+
+## 3. API 계층 (`app/`)
 
 ### `app/server.py`
 - 서비스의 핵심 백엔드입니다.
@@ -29,6 +47,7 @@
 - RL 모델 추론(추천 행동 산출)
 - 목표 성공 확률 Monte Carlo 추정
 - 분석 결과/이미지/버그제보를 IP 단위 폴더로 저장
+- 선택적 프록시 인증 검증 (`GEMMINI_PROXY_SHARED_SECRET`)
 - FastAPI 라우팅:
 - `/` 정적 페이지 반환
 - `/api/health` 헬스체크
@@ -40,7 +59,8 @@
 - 단일 페이지 프론트엔드(UI+JS)입니다.
 - 주요 책임:
 - 화면 공유 시작/중지
-- 캡처 프레임을 `/api/analyze`로 전송
+- 기본 경로: ROI 7개(`option1~4`, `possible`, `cost`, `count`)를 crop하여 `/api/analyze` 전송
+- fallback 경로: ROI 캡처 실패 시 전체 프레임을 JPEG 압축/리사이즈 후 `/api/analyze` 전송
 - OCR 결과/추천 행동/성공 확률 표시
 - 수동 스탯 조작(현재/목표 값) 및 옵션 반영
 - 버그 제보 입력 후 `/api/report` 전송
@@ -54,9 +74,8 @@
 
 ### `app/uploads/.gitkeep`
 - 업로드 임시 디렉터리 자리표시자입니다.
-- 현재 구조에서는 중복 저장을 최소화했지만, 런타임 호환 경로 보존을 위해 폴더를 유지합니다.
 
-## 3. OCR 계층 (`gemmini_vision/`)
+## 4. OCR 계층 (`gemmini_vision/`)
 
 ### `gemmini_vision/detect.py`
 - OCR 엔진 및 텍스트/숫자 인식 유틸리티를 담당합니다.
@@ -76,7 +95,7 @@
 ### `gemmini_vision/__init__.py`
 - OCR 패키지 초기화 파일입니다.
 
-## 4. RL 정책/환경 계층 (`gem_core/`)
+## 5. RL 정책/환경 계층 (`gem_core/`)
 
 ### `gem_core/role_env.py`
 - 역할(딜러/서폿), 젬 타입을 포함한 강화학습 환경 정의 파일입니다.
@@ -89,14 +108,41 @@
 ### `gem_core/__init__.py`
 - RL 코어 패키지 초기화 파일입니다.
 
-## 5. 모델 아티팩트 (`models/`)
+## 6. 모델 아티팩트 (`models/`)
 
 ### `models/production/gemmini_v9/best_model.zip`
 - 현재 서버에서 사용하는 단일 운영 모델입니다.
 - `app/server.py`의 기본 모델 경로가 이 파일을 직접 참조합니다.
 - 배포 번들에는 이 모델 하나만 포함합니다.
 
-## 6. 현재 정리 원칙
+## 7. 배포 아키텍처 (권장)
+
+- 브라우저 -> Vercel(`api/analyze`, `api/report`) -> AI 서버(FastAPI)
+- Vercel은 웹페이지/중계만 담당하고, OCR+AI 연산은 AI 서버가 담당합니다.
+
+### Vercel 환경변수
+- `AI_BACKEND_URL`: AI 서버 주소 (예: `https://your-ai.example.com`)
+- `API_SHARED_SECRET`: Vercel -> AI 서버 인증용 시크릿
+
+### AI 서버 환경변수
+- `GEMMINI_PROXY_SHARED_SECRET`: Vercel의 `API_SHARED_SECRET`와 동일 값
+
+## 8. 이미지 압축 정확도 & 동시성 메모
+
+### 이미지 압축 정확도
+- 기본값은 OCR 정확도를 해치지 않도록 보수적으로 설정했습니다.
+- 긴 변 1920 기준 리사이즈 + JPEG 품질 0.86 시작, 최대 약 1.6MB 목표로 점진 압축합니다.
+- 일반적인 1440p 캡처에서는 정확도 손실이 크지 않지만, UI 스케일이 너무 작으면 오인식 가능성은 남습니다.
+
+### 동시 요청
+- Vercel은 동시 요청 수용이 강하지만, 실제 병목은 AI 서버 OCR/RL 연산입니다.
+- 동시 사용자가 늘면 지연은 증가할 수 있습니다.
+- 운영 시 권장:
+1. `GEMMINI_GOAL_MC_ROLLOUTS` 조정 (예: 256 -> 128)
+2. AI 서버 CPU 확장 또는 인스턴스 분리
+3. 요청 큐/레이트리밋 강화
+
+## 9. 현재 정리 원칙
 
 - 폴더명은 역할 기준으로 분리:
 - `app`: 웹/API

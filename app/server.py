@@ -38,6 +38,12 @@ GOAL_SUCCESS_MODEL_PATH = ROOT_DIR / "goal_success" / "runs" / "dist625" / "best
 GOAL_SUCCESS_MODEL_PATH_FALLBACK = ROOT_DIR / "goal_success" / "runs" / "dist625_test" / "best.pt"
 
 GOAL_SUCCESS_MC_ROLLOUTS = int(os.getenv("GEMMINI_GOAL_MC_ROLLOUTS", "256"))
+PROXY_SHARED_SECRET = str(os.getenv("GEMMINI_PROXY_SHARED_SECRET", "") or "").strip()
+PROXY_SHARED_SECRET_HEADER = "x-gemmini-key"
+DEFAULT_ROI_SCHEMA_VERSION = "screen_v1"
+MULTICROP_ROI_SCHEMA_VERSION = "screen_v2_multicrop"
+SUPPORTED_ROI_SCHEMA_VERSIONS = {DEFAULT_ROI_SCHEMA_VERSION, MULTICROP_ROI_SCHEMA_VERSION}
+ROI_REQUIRED_LABELS = ("option1", "option2", "option3", "option4", "possible", "cost", "count")
 
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024  # 12MB
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -145,6 +151,18 @@ def _check_rate_limit(ip: str) -> None:
     bucket.append(now)
 
 
+def _verify_proxy_secret(request: Request) -> None:
+    """
+    Optional shared-secret guard for reverse-proxy deployments (e.g. Vercel -> AI server).
+    If GEMMINI_PROXY_SHARED_SECRET is unset, this check is disabled.
+    """
+    if not PROXY_SHARED_SECRET:
+        return
+    supplied = str(request.headers.get(PROXY_SHARED_SECRET_HEADER, "") or "").strip()
+    if not supplied or supplied != PROXY_SHARED_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized proxy key")
+
+
 def _sniff_image_kind(data: bytes) -> str | None:
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
@@ -173,6 +191,19 @@ def _validate_choice(name: str, value: Optional[str], *, allowed: set[str], defa
     if v not in allowed:
         raise HTTPException(status_code=400, detail=f"{name} must be one of {sorted(allowed)}")
     return v
+
+
+def _normalize_roi_schema_version(value: Optional[str]) -> tuple[str, bool]:
+    """
+    Soft validation for client ROI schema.
+    Unknown schema is allowed (for forward compatibility) and simply marked unsupported.
+    """
+    if value is None:
+        return DEFAULT_ROI_SCHEMA_VERSION, True
+    v = re.sub(r"[^a-zA-Z0-9._-]+", "", str(value).strip().lower())
+    if not v:
+        return DEFAULT_ROI_SCHEMA_VERSION, True
+    return v, bool(v in SUPPORTED_ROI_SCHEMA_VERSIONS)
 
 
 def _resolve_rl_model_path() -> Path:
@@ -258,7 +289,7 @@ def _persist_analyze_record(
     *,
     base: str,
     created_at: str,
-    image_rel_path: str,
+    image_rel_path: Optional[str],
     source_filename: str,
     client_ip: str,
     elapsed_ms: float,
@@ -1127,6 +1158,7 @@ async def submit_report(
     message: str = Form(...),
     record_id: Optional[str] = Form(None),
 ) -> dict:
+    _verify_proxy_secret(request)
     ip = _client_ip(request)
     _check_rate_limit(ip)
 
@@ -1147,6 +1179,7 @@ async def submit_report(
 
 @app.post("/api/upload")
 async def upload_image(request: Request, image: UploadFile = File(...)) -> dict:
+    _verify_proxy_secret(request)
     ip = _client_ip(request)
     _check_rate_limit(ip)
 
@@ -1169,7 +1202,14 @@ async def upload_image(request: Request, image: UploadFile = File(...)) -> dict:
 @app.post("/api/analyze")
 async def analyze_image(
     request: Request,
-    image: UploadFile = File(...),
+    image: Optional[UploadFile] = File(None),
+    roi_option1: Optional[UploadFile] = File(None),
+    roi_option2: Optional[UploadFile] = File(None),
+    roi_option3: Optional[UploadFile] = File(None),
+    roi_option4: Optional[UploadFile] = File(None),
+    roi_possible: Optional[UploadFile] = File(None),
+    roi_cost: Optional[UploadFile] = File(None),
+    roi_count: Optional[UploadFile] = File(None),
     willpower: Optional[int] = Form(None),
     points: Optional[int] = Form(None),
     effect1_level: Optional[int] = Form(None),
@@ -1180,8 +1220,10 @@ async def analyze_image(
     target_effect2_level: Optional[int] = Form(None),
     role: Optional[str] = Form(None),
     gem_type: Optional[str] = Form(None),
+    roi_schema_version: Optional[str] = Form(None),
     client_debug: Optional[str] = Form(None),
 ) -> dict:
+    _verify_proxy_secret(request)
     ip = _client_ip(request)
     _check_rate_limit(ip)
 
@@ -1207,6 +1249,10 @@ async def analyze_image(
         allowed={"stable", "solid", "immutable"},
         default="stable",
     )
+    selected_roi_schema, roi_schema_supported = _normalize_roi_schema_version(roi_schema_version)
+    roi_schema_warning: Optional[str] = None
+    if not roi_schema_supported:
+        roi_schema_warning = f"unsupported_roi_schema:{selected_roi_schema}"
 
     client_debug_payload: Any = None
     if client_debug:
@@ -1215,29 +1261,81 @@ async def analyze_image(
         except Exception:
             client_debug_payload = {"raw": str(client_debug)}
 
-    t_read0 = time.perf_counter()
-    filename, data, detected = await _read_valid_image(image)
-    timings_ms["read_image"] = (time.perf_counter() - t_read0) * 1000.0
+    roi_uploads: Dict[str, Optional[UploadFile]] = {
+        "option1": roi_option1,
+        "option2": roi_option2,
+        "option3": roi_option3,
+        "option4": roi_option4,
+        "possible": roi_possible,
+        "cost": roi_cost,
+        "count": roi_count,
+    }
+    roi_images: Dict[str, np.ndarray] = {}
+    roi_meta: Dict[str, dict] = {}
+    t_roi0 = time.perf_counter()
+    for label, upload in roi_uploads.items():
+        if upload is None:
+            continue
+        roi_filename, roi_data, roi_detected = await _read_valid_image(upload)
+        roi_arr = np.frombuffer(roi_data, dtype=np.uint8)
+        roi_img = cv2.imdecode(roi_arr, cv2.IMREAD_COLOR)
+        if roi_img is None:
+            raise HTTPException(status_code=400, detail=f"Failed to decode ROI image: {label}")
+        roi_images[label] = roi_img
+        roi_meta[label] = {
+            "filename": roi_filename,
+            "detected_kind": roi_detected,
+            "bytes": int(len(roi_data)),
+            "shape": [int(x) for x in roi_img.shape],
+        }
+    timings_ms["read_decode_rois"] = (time.perf_counter() - t_roi0) * 1000.0
+
+    roi_labels = set(roi_images.keys())
+    required_roi_labels = set(ROI_REQUIRED_LABELS)
+    has_complete_roi_set = required_roi_labels.issubset(roi_labels)
+
+    filename = "roi_bundle"
+    detected = "png"
+    data: bytes = b""
+    img: Optional[np.ndarray] = None
+    stored_image_rel_path: Optional[str] = None
+
+    if not has_complete_roi_set:
+        if image is None:
+            missing = sorted(required_roi_labels - roi_labels)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing image input. provide full image or complete ROI set: missing={missing}",
+            )
+        t_read0 = time.perf_counter()
+        filename, data, detected = await _read_valid_image(image)
+        timings_ms["read_image"] = (time.perf_counter() - t_read0) * 1000.0
 
     base, ext = _build_record_name(detected, ip)
 
-    t_persist0 = time.perf_counter()
-    _stored_image_name, stored_image_rel_path = _persist_image_bytes(base, ext, data, ip)
-    timings_ms["persist_image"] = (time.perf_counter() - t_persist0) * 1000.0
+    if data:
+        t_persist0 = time.perf_counter()
+        _stored_image_name, stored_image_rel_path = _persist_image_bytes(base, ext, data, ip)
+        timings_ms["persist_image"] = (time.perf_counter() - t_persist0) * 1000.0
 
-    t_decode0 = time.perf_counter()
-    arr = np.frombuffer(data, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    timings_ms["decode_image"] = (time.perf_counter() - t_decode0) * 1000.0
-    if img is None:
-        raise HTTPException(status_code=400, detail="Failed to decode image")
+        t_decode0 = time.perf_counter()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        timings_ms["decode_image"] = (time.perf_counter() - t_decode0) * 1000.0
+        if img is None:
+            raise HTTPException(status_code=400, detail="Failed to decode image")
 
     t_parser0 = time.perf_counter()
     parser = _get_parser()
     timings_ms["get_parser"] = (time.perf_counter() - t_parser0) * 1000.0
 
+    ocr_mode = "fullframe"
     t_ocr0 = time.perf_counter()
-    ocr_result = parser.parse_ocr_result(img)
+    if has_complete_roi_set:
+        ocr_mode = "multi_crop"
+        ocr_result = parser.parse_ocr_rois(roi_images)
+    else:
+        ocr_result = parser.parse_ocr_result(img)
     if not isinstance(ocr_result, dict):
         ocr_result = {}
     timings_ms["ocr_parse"] = (time.perf_counter() - t_ocr0) * 1000.0
@@ -1253,6 +1351,7 @@ async def analyze_image(
         ui_state = {"options": [], "rerolls": 0, "attempts_left": 0, "cost_state": 0}
     ui_state["role"] = selected_role
     ui_state["gem_type"] = selected_gem_type
+    ui_state["roi_schema_version"] = selected_roi_schema
     timings_ms["ui_state_convert"] = (time.perf_counter() - t_ui0) * 1000.0
 
     goal_success_prob: Optional[float] = None
@@ -1381,11 +1480,23 @@ async def analyze_image(
 
     debug = {
         "timings_ms": _to_builtin({k: round(float(v), 2) for k, v in timings_ms.items()}),
-        "selection": {"role": selected_role, "gem_type": selected_gem_type},
+        "selection": {
+            "role": selected_role,
+            "gem_type": selected_gem_type,
+            "roi_schema_version": selected_roi_schema,
+            "roi_schema_supported": bool(roi_schema_supported),
+            "ocr_mode": ocr_mode,
+        },
         "image": {
             "detected_kind": detected,
             "bytes": int(len(data)),
-            "shape": [int(x) for x in (img.shape if hasattr(img, "shape") else [])],
+            "shape": [int(x) for x in (img.shape if isinstance(img, np.ndarray) else [])],
+        },
+        "roi": {
+            "provided_labels": sorted(list(roi_labels)),
+            "required_labels": list(ROI_REQUIRED_LABELS),
+            "complete": bool(has_complete_roi_set),
+            "items": _to_builtin(roi_meta),
         },
         "env": {
             "python": str(sys.version).split()[0],
@@ -1404,6 +1515,15 @@ async def analyze_image(
         "goal_success": _to_builtin(goal_success_payload),
         "client_debug": _to_builtin(client_debug_payload),
     }
+    if roi_labels and not has_complete_roi_set and image is not None:
+        warnings = list(debug.get("warnings") or [])
+        missing = sorted(required_roi_labels - roi_labels)
+        warnings.append(f"incomplete_roi_set_fallback_fullframe:missing={','.join(missing)}")
+        debug["warnings"] = warnings
+    if roi_schema_warning:
+        warnings = list(debug.get("warnings") or [])
+        warnings.append(roi_schema_warning)
+        debug["warnings"] = warnings
 
     try:
         import torch

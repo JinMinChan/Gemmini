@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Local env / secrets
+.env
+.env.*
+
+# Runtime artifacts
+app/records/
+app/uploads/
+
+# Local test/analysis data (keep out of deploy repo)
+test_data/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
