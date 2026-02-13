@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
+FRONTEND_INDEX = ROOT_DIR / "frontend" / "index.html"
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 RECORDS_DIR = BASE_DIR / "records"
@@ -791,6 +792,12 @@ class RLRuntime:
             env.current_options = list(base_opts)
             env.terminated = False
             env.truncated = False
+            # IMPORTANT: env instances are reused across requests; reset step counters
+            # to avoid hitting max_decision_steps and truncating immediately (false 0%).
+            try:
+                env.decision_steps = 0
+            except Exception:
+                pass
             env.first_process_done = env.state.get("attemptsLeft", env.max_attempts) < env.max_attempts
             env.rng = np.random.default_rng(seed + i)
             obs_cache[i] = np.asarray(env._get_obs(), dtype=np.float32)
@@ -979,6 +986,10 @@ class RLRuntime:
             env.current_options = list(base_opts)
             env.terminated = False
             env.truncated = False
+            try:
+                env.decision_steps = 0
+            except Exception:
+                pass
             env.first_process_done = env.state.get("attemptsLeft", env.max_attempts) < env.max_attempts
             env.rng = np.random.default_rng(seed + i)
 
@@ -1152,6 +1163,10 @@ def _get_goal_success_runtime():
 
 @app.get("/")
 async def index() -> FileResponse:
+    # Local/dev convenience: serve the Vercel frontend if present so we can
+    # verify UI changes without redeploying.
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX)
     return FileResponse(STATIC_DIR / "index.html")
 
 
