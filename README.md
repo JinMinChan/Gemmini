@@ -19,34 +19,39 @@
 - 서버 실행에 필요한 Python 의존성 단일 목록입니다.
 - 웹 프레임워크(FastAPI/Uvicorn), OCR(OpenCV/EasyOCR), RL 추론(Torch/SB3) 의존성이 모두 포함되어 있습니다.
 
-### `vercel.json`
-- Vercel 배포 시 루트(`/`)를 `app/static/index.html`로 연결하는 라우팅 설정입니다.
-- 정적 캐시가 과도하게 남지 않도록 `Cache-Control: no-store` 정책을 포함합니다.
-
-## 2. Vercel 프록시 계층 (`api/`)
-
-### `api/analyze.js`
-- Vercel Edge Function입니다.
-- 브라우저 multipart 요청을 AI 서버의 `/api/analyze`로 전달합니다.
-- `API_SHARED_SECRET`가 있으면 `x-gemmini-key` 헤더를 붙여 인증합니다.
-
-### `api/report.js`
-- Vercel Edge Function입니다.
-- 사용자 제보를 AI 서버의 `/api/report`로 전달합니다.
-
-### `api/health.js`
-- Vercel 레이어 헬스체크용 경량 엔드포인트입니다.
-
-## 2-1. Vercel 배포 루트 분리 (`frontend/`)
+## 2. Vercel 배포 루트 분리 (`frontend/`)
 
 Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예: `torch`, `easyocr`, `opencv-python`)까지 설치하며
 빌드가 느려지는 문제를 피하기 위해, Vercel 배포용 파일을 `frontend/`로 별도 분리했습니다.
 
 - Vercel Project 설정에서 **Root Directory를 `frontend`로 지정**해서 배포합니다.
 - `frontend/`에는 정적 `index.html`과 `api/*`(Edge 프록시)만 포함됩니다.
+- `frontend/package.json`은 ESM(`type: module`)로 Edge Function 번들링 경고를 줄이기 위한 최소 설정입니다.
 - AI 서버(FastAPI)는 기존대로 저장소 루트에서 실행합니다.
 
-## 3. API 계층 (`app/`)
+### `frontend/index.html`
+- Vercel에서 서빙되는 단일 페이지 프론트엔드(UI+JS)입니다.
+- `/api/analyze`, `/api/report`로 요청을 보내며, Vercel Edge 프록시가 이를 AI 서버로 전달합니다.
+
+### `frontend/vercel.json`
+- Vercel 배포 시 루트(`/`)를 `frontend/index.html`로 연결하는 라우팅/헤더 설정입니다.
+- 정적 캐시가 과도하게 남지 않도록 `Cache-Control: no-store` 정책을 포함합니다.
+
+## 3. Vercel 프록시 계층 (`frontend/api/`)
+
+### `frontend/api/analyze.js`
+- Vercel Edge Function입니다.
+- 브라우저 multipart 요청을 AI 서버의 `/api/analyze`로 전달합니다.
+- `API_SHARED_SECRET`가 있으면 `x-gemmini-key` 헤더를 붙여 인증합니다.
+
+### `frontend/api/report.js`
+- Vercel Edge Function입니다.
+- 사용자 제보를 AI 서버의 `/api/report`로 전달합니다.
+
+### `frontend/api/health.js`
+- Vercel 레이어 헬스체크용 경량 엔드포인트입니다.
+
+## 4. API 계층 (`app/`)
 
 ### `app/server.py`
 - 서비스의 핵심 백엔드입니다.
@@ -84,7 +89,7 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 ### `app/uploads/.gitkeep`
 - 업로드 임시 디렉터리 자리표시자입니다.
 
-## 4. OCR 계층 (`gemmini_vision/`)
+## 5. OCR 계층 (`gemmini_vision/`)
 
 ### `gemmini_vision/detect.py`
 - OCR 엔진 및 텍스트/숫자 인식 유틸리티를 담당합니다.
@@ -104,7 +109,7 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 ### `gemmini_vision/__init__.py`
 - OCR 패키지 초기화 파일입니다.
 
-## 5. RL 정책/환경 계층 (`gem_core/`)
+## 6. RL 정책/환경 계층 (`gem_core/`)
 
 ### `gem_core/role_env.py`
 - 역할(딜러/서폿), 젬 타입을 포함한 강화학습 환경 정의 파일입니다.
@@ -117,14 +122,14 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 ### `gem_core/__init__.py`
 - RL 코어 패키지 초기화 파일입니다.
 
-## 6. 모델 아티팩트 (`models/`)
+## 7. 모델 아티팩트 (`models/`)
 
 ### `models/production/gemmini_v9/best_model.zip`
 - 현재 서버에서 사용하는 단일 운영 모델입니다.
 - `app/server.py`의 기본 모델 경로가 이 파일을 직접 참조합니다.
 - 배포 번들에는 이 모델 하나만 포함합니다.
 
-## 7. 배포 아키텍처 (권장)
+## 8. 배포 아키텍처 (권장)
 
 - 브라우저 -> Vercel(`api/analyze`, `api/report`) -> AI 서버(FastAPI)
 - Vercel은 웹페이지/중계만 담당하고, OCR+AI 연산은 AI 서버가 담당합니다.
@@ -136,7 +141,7 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 ### AI 서버 환경변수
 - `GEMMINI_PROXY_SHARED_SECRET`: Vercel의 `API_SHARED_SECRET`와 동일 값
 
-## 8. 이미지 압축 정확도 & 동시성 메모
+## 9. 이미지 압축 정확도 & 동시성 메모
 
 ### 이미지 압축 정확도
 - 기본값은 OCR 정확도를 해치지 않도록 보수적으로 설정했습니다.
@@ -151,7 +156,7 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 2. AI 서버 CPU 확장 또는 인스턴스 분리
 3. 요청 큐/레이트리밋 강화
 
-## 9. 현재 정리 원칙
+## 10. 현재 정리 원칙
 
 - 폴더명은 역할 기준으로 분리:
 - `app`: 웹/API
