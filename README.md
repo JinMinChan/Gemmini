@@ -37,6 +37,15 @@
 ### `api/health.js`
 - Vercel 레이어 헬스체크용 경량 엔드포인트입니다.
 
+## 2-1. Vercel 배포 루트 분리 (`frontend/`)
+
+Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예: `torch`, `easyocr`, `opencv-python`)까지 설치하며
+빌드가 느려지는 문제를 피하기 위해, Vercel 배포용 파일을 `frontend/`로 별도 분리했습니다.
+
+- Vercel Project 설정에서 **Root Directory를 `frontend`로 지정**해서 배포합니다.
+- `frontend/`에는 정적 `index.html`과 `api/*`(Edge 프록시)만 포함됩니다.
+- AI 서버(FastAPI)는 기존대로 저장소 루트에서 실행합니다.
+
 ## 3. API 계층 (`app/`)
 
 ### `app/server.py`
