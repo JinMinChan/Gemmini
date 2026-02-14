@@ -160,8 +160,37 @@ class GameStateParser:
                         print(f"  cost: {results['cost']}")
                     
                     elif label == "count":
-                        raw = read_numeric_text_with_fallback(roi, allowlist="0123456789/", expected_len=3)
-                        results["count"] = normalize_count(raw)
+                        # Count area includes Korean text + parentheses.
+                        # In some cases OCR returns high-confidence "19" from "(7/9)".
+                        # Strategy:
+                        # 1) Prefer full ROI first (keeps context so slash candidates appear).
+                        # 2) If that fails or returns no slash, retry on a numeric-heavy sub-crop.
+                        raw_full = read_numeric_text_with_fallback(
+                            roi, allowlist="0123456789/", expected_len=3
+                        )
+                        norm_full = normalize_count(raw_full)
+
+                        norm = norm_full
+                        if norm is None or "/" not in str(raw_full or ""):
+                            num_roi = roi
+                            try:
+                                h, w = roi.shape[:2]
+                                x1 = int(w * 0.25)
+                                x2 = int(w * 0.98)
+                                y1 = int(h * 0.05)
+                                y2 = int(h * 0.95)
+                                if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
+                                    num_roi = roi[y1:y2, x1:x2]
+                            except Exception:
+                                num_roi = roi
+                            raw_crop = read_numeric_text_with_fallback(
+                                num_roi, allowlist="0123456789/", expected_len=3
+                            )
+                            norm_crop = normalize_count(raw_crop)
+                            if norm_crop is not None:
+                                norm = norm_crop
+
+                        results["count"] = norm
                         print(f"  count: {results['count']}")
                 
                 except Exception as e:
@@ -241,8 +270,32 @@ class GameStateParser:
                         continue
 
                     if label == "count":
-                        raw = read_numeric_text_with_fallback(roi, allowlist="0123456789/", expected_len=3)
-                        results["count"] = normalize_count(raw)
+                        raw_full = read_numeric_text_with_fallback(
+                            roi, allowlist="0123456789/", expected_len=3
+                        )
+                        norm_full = normalize_count(raw_full)
+
+                        norm = norm_full
+                        if norm is None or "/" not in str(raw_full or ""):
+                            num_roi = roi
+                            try:
+                                h, w = roi.shape[:2]
+                                x1 = int(w * 0.25)
+                                x2 = int(w * 0.98)
+                                y1 = int(h * 0.05)
+                                y2 = int(h * 0.95)
+                                if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
+                                    num_roi = roi[y1:y2, x1:x2]
+                            except Exception:
+                                num_roi = roi
+                            raw_crop = read_numeric_text_with_fallback(
+                                num_roi, allowlist="0123456789/", expected_len=3
+                            )
+                            norm_crop = normalize_count(raw_crop)
+                            if norm_crop is not None:
+                                norm = norm_crop
+
+                        results["count"] = norm
                         continue
                 except Exception:
                     continue

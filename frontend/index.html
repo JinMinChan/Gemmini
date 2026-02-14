@@ -279,7 +279,32 @@
 
     <section class="mt-5 grid gap-4 lg:grid-cols-[1.1fr_1fr]">
       <div class="panel p-4">
-        <h2 class="text-lg font-bold text-sky-100">공유 화면</h2>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-lg font-bold text-sky-100">공유 화면</h2>
+          <div class="flex items-center gap-2">
+            <button
+              id="roiAdjustBtn"
+              class="glow-btn rounded-md border border-slate-500/60 bg-slate-500/10 px-3 py-1.5 text-xs font-semibold text-slate-100"
+              disabled
+            >
+              화면 조정
+            </button>
+            <div class="relative group">
+              <button
+                type="button"
+                class="glow-btn flex h-7 w-7 items-center justify-center rounded-full border border-slate-500/60 bg-slate-500/10 text-xs font-extrabold text-slate-100"
+                aria-label="화면 조정 도움말"
+              >
+                ?
+              </button>
+              <div
+                class="pointer-events-none absolute right-0 top-full z-10 mt-2 hidden w-max max-w-xs rounded-md border border-slate-700 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-lg group-hover:block"
+              >
+                화면 인식할 부분을 조정합니다
+              </div>
+            </div>
+          </div>
+        </div>
         <p class="mt-1 text-xs text-slate-300">공유화면 아래 설정에 게임 창을 선택해주세요.</p>
         <div class="halo mt-3 p-3">
           <video id="screenVideo" class="h-[18rem] w-full rounded-xl border border-slate-700/80 bg-slate-950 object-contain sm:h-[22rem]" autoplay muted playsinline></video>
@@ -477,12 +502,136 @@
     </section>
   </main>
 
+  <div id="roiAdjustModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4">
+    <div class="panel w-full max-w-6xl p-4 sm:p-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-lg font-extrabold tracking-tight text-sky-100">화면 조정</div>
+          <div class="mt-1 text-xs text-slate-300">박스를 드래그해서 화면 인식 위치를 맞춘 뒤 적용을 누르세요.</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            id="roiAdjustCancelBtn"
+            class="glow-btn rounded-lg border border-slate-500/60 bg-slate-500/10 px-4 py-2 text-sm font-semibold text-slate-100"
+          >
+            취소
+          </button>
+          <button
+            id="roiAdjustApplyBtn"
+            class="glow-btn rounded-lg border border-cyan-400/60 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100"
+          >
+            적용
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-4 grid gap-3 lg:grid-cols-[1fr_16rem]">
+        <div id="roiAdjustPreviewWrap" class="relative h-[68vh] w-full overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950">
+          <img id="roiAdjustPreviewImg" class="absolute inset-0 h-full w-full object-contain" alt="ROI 미리보기" />
+          <div id="roiAdjustOverlay" class="absolute inset-0">
+            <div
+              id="roiDragOptions"
+              data-drag="options"
+              class="group pointer-events-auto absolute touch-none rounded-md border-2 border-rose-400/90 bg-rose-400/5 shadow-[0_0_0_1px_rgba(0,0,0,0.3)] cursor-move"
+            >
+              <div class="pointer-events-none absolute -top-7 left-0 whitespace-nowrap rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-extrabold text-rose-200 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-active:opacity-100">옵션</div>
+              <div id="roiOptSep1" class="absolute top-0 h-full w-[2px] bg-rose-400/70"></div>
+              <div id="roiOptSep2" class="absolute top-0 h-full w-[2px] bg-rose-400/70"></div>
+              <div id="roiOptSep3" class="absolute top-0 h-full w-[2px] bg-rose-400/70"></div>
+            </div>
+
+            <div
+              id="roiDragReroll"
+              data-drag="possible"
+              class="group pointer-events-auto absolute touch-none rounded-md border-2 border-cyan-300/90 bg-cyan-300/5 shadow-[0_0_0_1px_rgba(0,0,0,0.3)] cursor-move"
+            >
+              <div class="pointer-events-none absolute -top-7 left-0 whitespace-nowrap rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-extrabold text-cyan-200 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-active:opacity-100">리롤</div>
+            </div>
+
+            <div
+              id="roiDragCount"
+              data-drag="count"
+              class="group pointer-events-auto absolute touch-none rounded-md border-2 border-amber-300/90 bg-amber-300/5 shadow-[0_0_0_1px_rgba(0,0,0,0.3)] cursor-move"
+            >
+              <div class="pointer-events-none absolute -top-7 left-0 whitespace-nowrap rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-extrabold text-amber-200 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-active:opacity-100">가공횟수</div>
+            </div>
+
+            <div
+              id="roiDragCost"
+              data-drag="cost"
+              class="group pointer-events-auto absolute touch-none rounded-md border-2 border-emerald-300/90 bg-emerald-300/5 shadow-[0_0_0_1px_rgba(0,0,0,0.3)] cursor-move"
+            >
+              <div class="pointer-events-none absolute -top-7 left-0 whitespace-nowrap rounded bg-slate-950/70 px-2 py-0.5 text-[11px] font-extrabold text-emerald-200 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-active:opacity-100">골드</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-slate-700/80 bg-slate-900/70 p-3 text-xs text-slate-200">
+          <div class="text-sm font-semibold text-sky-100">조정 대상</div>
+          <ul class="mt-2 list-disc pl-4 text-slate-300">
+            <li>옵션: 4개 옵션 영역을 한 번에 이동합니다.</li>
+            <li>리롤: 우측 상단 “n회 가능” 영역입니다.</li>
+            <li>가공횟수: 하단 “(n/9)” 영역입니다.</li>
+            <li>골드: 우측 하단 비용 숫자 영역입니다.</li>
+          </ul>
+          <div class="mt-3 text-[11px] text-slate-400">
+            팁: 옵션 박스는 내부 선(4등분)으로 실제 옵션 칸과 정렬하세요.
+          </div>
+          <div class="mt-4 border-t border-slate-700/80 pt-3">
+            <div class="text-sm font-semibold text-sky-100">예시 이미지</div>
+            <div class="mt-1 text-[11px] text-slate-400">기본 16:9 기준 예시입니다. (클릭하면 크게 볼 수 있어요)</div>
+            <div class="mt-2 grid gap-1 text-[11px] text-slate-300">
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-sm bg-rose-400"></span>
+                <span>옵션</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-sm bg-cyan-300"></span>
+                <span>리롤</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-sm bg-amber-300"></span>
+                <span>가공횟수</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-sm bg-emerald-300"></span>
+                <span>골드</span>
+              </div>
+            </div>
+            <a href="/static/roi_example.jpg" target="_blank" rel="noreferrer">
+              <img
+                src="/static/roi_example.jpg"
+                alt="ROI 예시"
+                loading="lazy"
+                class="mt-2 w-full rounded-md border border-slate-700/80"
+              />
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
 			    const shareStartBtn = document.getElementById("shareStartBtn");
 			    const shareStopBtn = document.getElementById("shareStopBtn");
 				    const analyzeBtn = document.getElementById("analyzeBtn");
 				    const resetBtn = document.getElementById("resetBtn");
 				    const screenVideo = document.getElementById("screenVideo");
+				    const roiAdjustBtn = document.getElementById("roiAdjustBtn");
+				    const roiAdjustModal = document.getElementById("roiAdjustModal");
+				    const roiAdjustPreviewWrap = document.getElementById("roiAdjustPreviewWrap");
+				    const roiAdjustPreviewImg = document.getElementById("roiAdjustPreviewImg");
+				    const roiAdjustOverlay = document.getElementById("roiAdjustOverlay");
+				    const roiAdjustCancelBtn = document.getElementById("roiAdjustCancelBtn");
+				    const roiAdjustApplyBtn = document.getElementById("roiAdjustApplyBtn");
+				    const roiDragOptions = document.getElementById("roiDragOptions");
+				    const roiDragReroll = document.getElementById("roiDragReroll");
+				    const roiDragCount = document.getElementById("roiDragCount");
+				    const roiDragCost = document.getElementById("roiDragCost");
+				    const roiOptSep1 = document.getElementById("roiOptSep1");
+				    const roiOptSep2 = document.getElementById("roiOptSep2");
+				    const roiOptSep3 = document.getElementById("roiOptSep3");
 				    const bugReportInput = document.getElementById("bugReportInput");
 				    const bugReportSendBtn = document.getElementById("bugReportSendBtn");
 				    const bugReportStatus = document.getElementById("bugReportStatus");
@@ -507,6 +656,7 @@
 	        "2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.",
 	        "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식(OCR) 버그가 발생하고 있습니다.",
 	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
+	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역(옵션/리롤/가공횟수/골드)을 드래그로 조정할 수 있습니다.",
 	      ];
 
 	      function renderNoticeItems(items) {
@@ -572,6 +722,7 @@
 	            attempts_left: false,
 	            cost_state: false,
 	          },
+            roiOverrides: null,
 			      ocrCount: null,
 				      lastResponse: null,
 					      successProb: null,
@@ -923,6 +1074,7 @@
 	      shareStartBtn.disabled = isSharing;
       shareStopBtn.disabled = !isSharing;
       analyzeBtn.disabled = !isSharing;
+      if (roiAdjustBtn) roiAdjustBtn.disabled = !isSharing;
       shareStatus.textContent = isSharing ? "공유 중" : "공유 안함";
       shareStatus.className = `ml-1 font-semibold ${isSharing ? "text-emerald-300" : "text-rose-300"}`;
     }
@@ -1005,6 +1157,58 @@
       { label: "cost", x: 1579.21, y: 887.40, w: 150.00, h: 70.00 },
       { label: "count", x: 1476.60, y: 1022.08, w: 120.00, h: 80.00 },
     ];
+    const ROI_OVERRIDE_STORAGE_KEY = "gemmini_roi_overrides_screen_v2";
+    const ROI_ADJUST_LABELS = ["option1", "option2", "option3", "option4", "possible", "cost", "count"];
+
+    function loadRoiOverridesFromStorage() {
+      try {
+        const raw = String(window.localStorage.getItem(ROI_OVERRIDE_STORAGE_KEY) || "").trim();
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return null;
+        const out = {};
+        for (const label of ROI_ADJUST_LABELS) {
+          const v = parsed[label];
+          if (!v || typeof v !== "object") continue;
+          const x = Number(v.x);
+          const y = Number(v.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          out[label] = {
+            x: Math.max(0, Math.min(ROI_BASE_WIDTH, x)),
+            y: Math.max(0, Math.min(ROI_BASE_HEIGHT, y)),
+          };
+        }
+        return Object.keys(out).length ? out : null;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function saveRoiOverridesToStorage(overrides) {
+      try {
+        if (!overrides || typeof overrides !== "object") {
+          window.localStorage.removeItem(ROI_OVERRIDE_STORAGE_KEY);
+          return;
+        }
+        window.localStorage.setItem(ROI_OVERRIDE_STORAGE_KEY, JSON.stringify(overrides));
+      } catch (_err) {
+        // ignore storage failures
+      }
+    }
+
+    function applyRoiOverrides(box, overrides) {
+      const ov = overrides && typeof overrides === "object" ? overrides[box.label] : null;
+      if (!ov) return box;
+      const x = Number(ov.x);
+      const y = Number(ov.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return box;
+      return { ...box, x, y };
+    }
+
+    // Load persisted ROI adjustments after the schema constants exist.
+    if (state && state.roiOverrides == null) {
+      state.roiOverrides = loadRoiOverridesFromStorage();
+    }
     const CAPTURE_MAX_LONG_EDGE = 1920;
     const CAPTURE_TARGET_BYTES = 1_600_000; // ~1.6MB
     const CAPTURE_INITIAL_JPEG_QUALITY = 0.86;
@@ -1034,41 +1238,64 @@
       });
     }
 
+    function computeRoiContentMapping(srcW, srcH) {
+      const baseAspect = ROI_BASE_WIDTH / ROI_BASE_HEIGHT;
+      const srcAspect = srcW / srcH;
+      const eps = 0.02; // tolerate small rounding differences
+      let contentX = 0;
+      let contentY = 0;
+      let contentW = srcW;
+      let contentH = srcH;
+      let letterboxMode = "direct";
+      if (Number.isFinite(srcAspect) && srcAspect > 0 && Math.abs(srcAspect - baseAspect) > eps) {
+        if (srcAspect > baseAspect) {
+          // wider than base -> crop horizontally (use centered 16:9 region)
+          contentW = Math.max(1, Math.round(srcH * baseAspect));
+          contentH = srcH;
+          contentX = Math.max(0, Math.round((srcW - contentW) / 2));
+          contentY = 0;
+          letterboxMode = "crop_x";
+        } else {
+          // taller than base -> crop vertically
+          contentW = srcW;
+          contentH = Math.max(1, Math.round(srcW / baseAspect));
+          contentX = 0;
+          contentY = Math.max(0, Math.round((srcH - contentH) / 2));
+          letterboxMode = "crop_y";
+        }
+      }
+
+      const scaleX = contentW / ROI_BASE_WIDTH;
+      const scaleY = contentH / ROI_BASE_HEIGHT;
+      return {
+        contentX,
+        contentY,
+        contentW,
+        contentH,
+        scaleX,
+        scaleY,
+        letterbox: {
+          mode: letterboxMode,
+          content_x: contentX,
+          content_y: contentY,
+          content_w: contentW,
+          content_h: contentH,
+          src_aspect: Math.round((srcAspect || 0) * 1000) / 1000,
+          base_aspect: Math.round(baseAspect * 1000) / 1000,
+        },
+      };
+    }
+
 	    function scaledRoiRect(box, srcW, srcH) {
         // If the captured video is not the same aspect ratio as the ROI schema
         // (e.g. 21:9 ultrawide), the game UI is typically centered with extra
         // horizontal content. Map ROI coordinates onto the centered base-aspect
         // content rect instead of stretching across the full frame.
-        const baseAspect = ROI_BASE_WIDTH / ROI_BASE_HEIGHT;
-        const srcAspect = srcW / srcH;
-        const eps = 0.02; // tolerate small rounding differences
-        let contentX = 0;
-        let contentY = 0;
-        let contentW = srcW;
-        let contentH = srcH;
-        let letterboxMode = "direct";
-        if (Number.isFinite(srcAspect) && srcAspect > 0 && Math.abs(srcAspect - baseAspect) > eps) {
-          if (srcAspect > baseAspect) {
-            // wider than base -> crop horizontally (use centered 16:9 region)
-            contentW = Math.max(1, Math.round(srcH * baseAspect));
-            contentH = srcH;
-            contentX = Math.max(0, Math.round((srcW - contentW) / 2));
-            contentY = 0;
-            letterboxMode = "crop_x";
-          } else {
-            // taller than base -> crop vertically
-            contentW = srcW;
-            contentH = Math.max(1, Math.round(srcW / baseAspect));
-            contentX = 0;
-            contentY = Math.max(0, Math.round((srcH - contentH) / 2));
-            letterboxMode = "crop_y";
-          }
-        }
-
-	      const scaleX = contentW / ROI_BASE_WIDTH;
-	      const scaleY = contentH / ROI_BASE_HEIGHT;
-	      const cx = contentX + box.x * scaleX;
-	      const cy = contentY + box.y * scaleY;
+        const mapping = computeRoiContentMapping(srcW, srcH);
+	      const scaleX = mapping.scaleX;
+	      const scaleY = mapping.scaleY;
+	      const cx = mapping.contentX + box.x * scaleX;
+	      const cy = mapping.contentY + box.y * scaleY;
 	      const bw = Math.max(1, Math.round(box.w * scaleX));
 	      const bh = Math.max(1, Math.round(box.h * scaleY));
 
@@ -1082,15 +1309,7 @@
 	        y: y1,
 	        w: Math.max(1, x2 - x1),
 	        h: Math.max(1, y2 - y1),
-          letterbox: {
-            mode: letterboxMode,
-            content_x: contentX,
-            content_y: contentY,
-            content_w: contentW,
-            content_h: contentH,
-            src_aspect: Math.round((srcAspect || 0) * 1000) / 1000,
-            base_aspect: Math.round(baseAspect * 1000) / 1000,
-          },
+          letterbox: mapping.letterbox,
 	      };
 	    }
 
@@ -1103,7 +1322,7 @@
 	      const rois = [];
         let letterbox = null;
 	      for (const box of ROI_BOXES) {
-	        const rect = scaledRoiRect(box, srcW, srcH);
+	        const rect = scaledRoiRect(applyRoiOverrides(box, state.roiOverrides), srcW, srcH);
           if (!letterbox && rect.letterbox) {
             letterbox = rect.letterbox;
           }
@@ -1179,6 +1398,314 @@
           reject(err);
         }
       });
+    }
+
+    let roiAdjustSession = null;
+    let roiAdjustDrag = null;
+
+    function cloneJson(v) {
+      try {
+        return v == null ? v : JSON.parse(JSON.stringify(v));
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function buildRoiDraftFromCurrent(overridesRaw) {
+      const overrides = overridesRaw && typeof overridesRaw === "object" ? overridesRaw : {};
+      const draft = {};
+      for (const label of ROI_ADJUST_LABELS) {
+        const def = ROI_BOXES.find((b) => b.label === label);
+        if (!def) continue;
+        const ov = overrides[label];
+        const x = Number(ov && typeof ov === "object" ? ov.x : def.x);
+        const y = Number(ov && typeof ov === "object" ? ov.y : def.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        draft[label] = {
+          x: Math.max(0, Math.min(ROI_BASE_WIDTH, x)),
+          y: Math.max(0, Math.min(ROI_BASE_HEIGHT, y)),
+        };
+      }
+      return draft;
+    }
+
+    function computeContainRect(containerW, containerH, contentW, contentH) {
+      const cw = Math.max(1, Number(containerW) || 1);
+      const ch = Math.max(1, Number(containerH) || 1);
+      const iw = Math.max(1, Number(contentW) || 1);
+      const ih = Math.max(1, Number(contentH) || 1);
+      const scale = Math.min(cw / iw, ch / ih);
+      const w = iw * scale;
+      const h = ih * scale;
+      const x = (cw - w) / 2;
+      const y = (ch - h) / 2;
+      return { x, y, w, h, scale };
+    }
+
+    function setBoxStyle(el, rect) {
+      if (!el || !rect) return;
+      el.style.left = `${Math.round(rect.x)}px`;
+      el.style.top = `${Math.round(rect.y)}px`;
+      el.style.width = `${Math.max(1, Math.round(rect.w))}px`;
+      el.style.height = `${Math.max(1, Math.round(rect.h))}px`;
+    }
+
+    function roiOverlayDeltaToBaseDelta(dxOverlay, dyOverlay, session) {
+      if (!roiAdjustPreviewWrap || !session) return { dxBase: 0, dyBase: 0 };
+      const wrapRect = roiAdjustPreviewWrap.getBoundingClientRect();
+      const contain = computeContainRect(wrapRect.width, wrapRect.height, session.preview_w, session.preview_h);
+      const mapping = computeRoiContentMapping(session.src_w, session.src_h);
+      const cScale = Number(contain.scale) || 1;
+      const pScale = Number(session.preview_scale) || 1;
+      const denomX = cScale * pScale * (Number(mapping.scaleX) || 1);
+      const denomY = cScale * pScale * (Number(mapping.scaleY) || 1);
+      if (!Number.isFinite(denomX) || !Number.isFinite(denomY) || denomX === 0 || denomY === 0) {
+        return { dxBase: 0, dyBase: 0 };
+      }
+      return { dxBase: dxOverlay / denomX, dyBase: dyOverlay / denomY };
+    }
+
+    function renderRoiAdjustOverlay() {
+      if (!roiAdjustSession || !roiAdjustPreviewWrap) return;
+      const session = roiAdjustSession;
+      const wrapRect = roiAdjustPreviewWrap.getBoundingClientRect();
+      const contain = computeContainRect(wrapRect.width, wrapRect.height, session.preview_w, session.preview_h);
+
+      const srcW = session.src_w;
+      const srcH = session.src_h;
+      const pScale = session.preview_scale;
+
+      function srcRectToOverlayRect(srcRect) {
+        const px = srcRect.x * pScale;
+        const py = srcRect.y * pScale;
+        const pw = srcRect.w * pScale;
+        const ph = srcRect.h * pScale;
+        return {
+          x: contain.x + px * contain.scale,
+          y: contain.y + py * contain.scale,
+          w: pw * contain.scale,
+          h: ph * contain.scale,
+        };
+      }
+
+      const optionRects = [];
+      for (const label of ["option1", "option2", "option3", "option4"]) {
+        const def = ROI_BOXES.find((b) => b.label === label);
+        const xy = session.draft[label];
+        if (!def || !xy) continue;
+        optionRects.push(
+          scaledRoiRect({ ...def, x: xy.x, y: xy.y }, srcW, srcH)
+        );
+      }
+
+      if (optionRects.length === 4 && roiDragOptions) {
+        const xmin = Math.min(...optionRects.map((r) => r.x));
+        const ymin = Math.min(...optionRects.map((r) => r.y));
+        const xmax = Math.max(...optionRects.map((r) => r.x + r.w));
+        const ymax = Math.max(...optionRects.map((r) => r.y + r.h));
+        const union = { x: xmin, y: ymin, w: xmax - xmin, h: ymax - ymin };
+        const unionOverlay = srcRectToOverlayRect(union);
+        setBoxStyle(roiDragOptions, unionOverlay);
+
+        const sorted = optionRects.slice().sort((a, b) => a.x - b.x);
+        const boundaries = sorted.slice(0, 3).map((r) => (r.x + r.w - union.x) * pScale * contain.scale);
+        if (roiOptSep1) roiOptSep1.style.left = `${Math.round(boundaries[0] || 0)}px`;
+        if (roiOptSep2) roiOptSep2.style.left = `${Math.round(boundaries[1] || 0)}px`;
+        if (roiOptSep3) roiOptSep3.style.left = `${Math.round(boundaries[2] || 0)}px`;
+      }
+
+      const named = [
+        ["possible", roiDragReroll],
+        ["count", roiDragCount],
+        ["cost", roiDragCost],
+      ];
+      for (const [label, el] of named) {
+        const def = ROI_BOXES.find((b) => b.label === label);
+        const xy = session.draft[label];
+        if (!def || !xy || !el) continue;
+        const rect = scaledRoiRect({ ...def, x: xy.x, y: xy.y }, srcW, srcH);
+        setBoxStyle(el, srcRectToOverlayRect(rect));
+      }
+    }
+
+    async function openRoiAdjustModal() {
+      if (!roiAdjustBtn || !roiAdjustModal || !roiAdjustPreviewImg || !roiAdjustPreviewWrap) return;
+      if (!screenVideo.videoWidth || !screenVideo.videoHeight) {
+        alert("공유 화면 프레임이 없습니다. 화면 공유를 다시 시작해주세요.");
+        return;
+      }
+
+      const srcW = screenVideo.videoWidth;
+      const srcH = screenVideo.videoHeight;
+      const resized = fitSize(srcW, srcH, 1600);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = resized.width;
+      canvas.height = resized.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        alert("Canvas context unavailable.");
+        return;
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+
+      let url = null;
+      try {
+        const blob = await canvasToBlob(canvas, "image/jpeg", 0.9);
+        url = URL.createObjectURL(blob);
+      } catch (_err) {
+        alert("미리보기 캡처에 실패했습니다.");
+        return;
+      }
+
+      const beforeRaw = cloneJson(state.roiOverrides) || null;
+      roiAdjustSession = {
+        before_raw: beforeRaw,
+        draft: buildRoiDraftFromCurrent(beforeRaw),
+        src_w: srcW,
+        src_h: srcH,
+        preview_w: resized.width,
+        preview_h: resized.height,
+        preview_scale: resized.width / srcW,
+        preview_url: url,
+      };
+
+      roiAdjustPreviewImg.src = url;
+      await new Promise((resolve) => {
+        roiAdjustPreviewImg.onload = () => resolve(true);
+        roiAdjustPreviewImg.onerror = () => resolve(false);
+      });
+
+      roiAdjustModal.classList.remove("hidden");
+      roiAdjustModal.classList.add("flex");
+      document.body.style.overflow = "hidden";
+
+      requestAnimationFrame(() => {
+        renderRoiAdjustOverlay();
+      });
+    }
+
+    function closeRoiAdjustModal({ apply }) {
+      if (!roiAdjustModal) return;
+      const session = roiAdjustSession;
+      roiAdjustDrag = null;
+      roiAdjustSession = null;
+      roiAdjustModal.classList.add("hidden");
+      roiAdjustModal.classList.remove("flex");
+      document.body.style.overflow = "";
+
+      if (session && session.preview_url) {
+        try {
+          URL.revokeObjectURL(session.preview_url);
+        } catch (_err) {
+          // ignore
+        }
+      }
+
+      if (!session) return;
+      if (apply) {
+        state.roiOverrides = session.draft;
+        saveRoiOverridesToStorage(state.roiOverrides);
+      } else {
+        state.roiOverrides = session.before_raw;
+      }
+    }
+
+    function onRoiDragPointerDown(ev) {
+      const target = ev.currentTarget && ev.currentTarget.dataset ? ev.currentTarget.dataset.drag : null;
+      if (!target || !roiAdjustSession) return;
+      roiAdjustDrag = {
+        target,
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        startDraft: cloneJson(roiAdjustSession.draft) || buildRoiDraftFromCurrent(null),
+      };
+      try {
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+      } catch (_err) {
+        // ignore
+      }
+      ev.preventDefault();
+    }
+
+    function onRoiDragPointerMove(ev) {
+      if (!roiAdjustDrag || !roiAdjustSession) return;
+      const dx = ev.clientX - roiAdjustDrag.startX;
+      const dy = ev.clientY - roiAdjustDrag.startY;
+      const { dxBase, dyBase } = roiOverlayDeltaToBaseDelta(dx, dy, roiAdjustSession);
+      if (!Number.isFinite(dxBase) || !Number.isFinite(dyBase)) return;
+
+      const next = cloneJson(roiAdjustDrag.startDraft) || {};
+      const applyDelta = (label) => {
+        if (!next[label]) return;
+        next[label] = {
+          x: Math.max(0, Math.min(ROI_BASE_WIDTH, Number(next[label].x) + dxBase)),
+          y: Math.max(0, Math.min(ROI_BASE_HEIGHT, Number(next[label].y) + dyBase)),
+        };
+      };
+
+      if (roiAdjustDrag.target === "options") {
+        for (const label of ["option1", "option2", "option3", "option4"]) {
+          applyDelta(label);
+        }
+      } else {
+        applyDelta(roiAdjustDrag.target);
+      }
+
+      roiAdjustSession.draft = next;
+      renderRoiAdjustOverlay();
+      ev.preventDefault();
+    }
+
+    function onRoiDragPointerUp(_ev) {
+      roiAdjustDrag = null;
+    }
+
+    function bindRoiAdjustControls() {
+      if (!roiAdjustBtn || !roiAdjustModal) return;
+      if (roiAdjustBtn.dataset.bound === "1") return;
+      roiAdjustBtn.dataset.bound = "1";
+
+      roiAdjustBtn.addEventListener("click", openRoiAdjustModal);
+
+      if (roiAdjustCancelBtn) {
+        roiAdjustCancelBtn.addEventListener("click", () => closeRoiAdjustModal({ apply: false }));
+      }
+      if (roiAdjustApplyBtn) {
+        roiAdjustApplyBtn.addEventListener("click", () => closeRoiAdjustModal({ apply: true }));
+      }
+
+      // backdrop click -> cancel
+      roiAdjustModal.addEventListener("click", (ev) => {
+        if (ev.target === roiAdjustModal) {
+          closeRoiAdjustModal({ apply: false });
+        }
+      });
+
+      window.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && roiAdjustSession) {
+          closeRoiAdjustModal({ apply: false });
+        }
+      });
+
+      const draggables = [roiDragOptions, roiDragReroll, roiDragCount, roiDragCost].filter(Boolean);
+      for (const el of draggables) {
+        el.addEventListener("pointerdown", onRoiDragPointerDown);
+        el.addEventListener("pointermove", onRoiDragPointerMove);
+        el.addEventListener("pointerup", onRoiDragPointerUp);
+        el.addEventListener("pointercancel", onRoiDragPointerUp);
+      }
+
+      if (roiAdjustPreviewWrap) {
+        // Re-render on resize to keep overlay aligned.
+        const ro = new ResizeObserver(() => {
+          if (roiAdjustSession) renderRoiAdjustOverlay();
+        });
+        ro.observe(roiAdjustPreviewWrap);
+      }
     }
 
 		    async function analyzeCapture() {
@@ -1268,6 +1795,7 @@
 			            upload_bytes: uploadBytes || null,
 			            jpeg_quality: capture.jpeg_quality || null,
 			            letterbox: capture.letterbox || null,
+                    roi_overrides: state.roiOverrides || null,
 		                roi_count: roiCount,
 		                roi_labels: roiLabels,
 		                roi_rects: roiRects,
@@ -1341,6 +1869,7 @@
 			              first_capture_pipeline: captureMode,
 			              first_roi_schema_version: roiSchemaVersion,
 			              first_letterbox: capture?.letterbox || null,
+                      roi_overrides: state.roiOverrides || null,
 			              manual_overrides: manualOverrides,
 			            })
 			          );
@@ -1543,6 +2072,7 @@
 	        bindRoleGemControls();
 			    bindStatControls();
 	        bindSummaryAdjustControls();
+          bindRoiAdjustControls();
 	        renderNoticeItems(DEFAULT_NOTICE_ITEMS);
 	        loadNotice();
 		    setSharingUI(false);

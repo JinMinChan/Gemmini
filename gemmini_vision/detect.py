@@ -134,7 +134,10 @@ def read_numeric_text_with_fallback(roi, allowlist, expected_len=None):
             # 앞쪽 variant를 조금 우대, confidence/길이도 반영
             score = conf + 0.03 * len(filtered) - 0.01 * idx
             if '/' in clean_allowlist:
-                score += 0.20 if '/' in filtered else -0.15
+                # For count fields we strongly prefer candidates that include '/'.
+                # EasyOCR sometimes returns a high-confidence "19" from "(7/9)",
+                # which would collapse into "1/9" after normalization.
+                score += 0.60 if '/' in filtered else -0.60
             if expected_len is not None:
                 score -= 0.08 * abs(len(filtered) - expected_len)
             if score > best_score:
@@ -761,6 +764,26 @@ def normalize_count(text):
         .replace('I', '1')
         .replace('l', '1')
     )
+
+    # EasyOCR sometimes returns multiple slashes like "11/7/9".
+    # In that case the regex below would lock onto the first "11/7" and lose the true denominator.
+    # Fall back to digit-stream reconstruction which reliably picks 7/9.
+    if raw.count('/') >= 2:
+        digits = [int(d) for d in re.findall(r'\d', raw)]
+        if len(digits) >= 2:
+            if 9 in digits:
+                right = 9
+            elif 7 in digits:
+                right = 7
+            else:
+                right = digits[-1]
+            cand = [d for d in digits if d != right]
+            left = max(cand) if cand else digits[0]
+            if right not in (7, 9):
+                right = 7 if abs(right - 7) <= abs(right - 9) else 9
+            if left > right:
+                left = right
+            return f"{left}/{right}"
 
     # 1) 정상/유사 패턴: x/y
     m = re.search(r'(\d{1,2})\s*/\s*(\d{1,2})', raw)
