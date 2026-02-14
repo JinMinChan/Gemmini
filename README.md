@@ -10,6 +10,17 @@
 - `app.server:app`(FastAPI 앱 객체)을 바인딩해 HTTP 서버를 시작합니다.
 - 서비스 프로세스를 띄우는 가장 얇은 부트스트랩 파일입니다.
 
+### `start_cloudflare.sh`
+- 로컬 `127.0.0.1:8000` 서버를 외부에 노출하기 위한 **Cloudflare Quick Tunnel** 실행 스크립트입니다.
+- 학교/상위망 등에서 **인바운드 포트포워딩이 막혀 Vercel이 백엔드에 접근 못하는** 상황을 우회하기 위한 기본 경로입니다.
+- 실행하면 `https://xxxx.trycloudflare.com` 형태의 공개 URL을 출력하고, 그 URL을 Vercel의 `AI_BACKEND_URL`로 설정하면 됩니다.
+- 주의:
+  - Cloudflare Tunnel은 **outbound TCP/UDP 7844**가 필요합니다.
+  - 일부 학교/기업망에서는 7844가 막혀 있어 터널이 연결되지 않을 수 있습니다(로그에 `:7844 i/o timeout`).
+- 운영 팁:
+  - `cloudflared`는 가능한 한 **계속 켜두고**, 코드 수정 시 `python run_server.py`만 재시작하면 URL은 유지됩니다.
+  - `cloudflared`를 껐다 켜면 URL이 바뀌므로, 그때만 Vercel 환경변수 변경 + Redeploy가 필요합니다.
+
 ### `start_ngrok.sh`
 - 로컬 `127.0.0.1:8000` 서버를 외부에 노출하기 위한 ngrok 실행 스크립트입니다.
 - authtoken 설정 여부를 검사하고, 서버 헬스체크(`GET /api/health`)까지 확인합니다.
@@ -133,6 +144,7 @@ Vercel이 저장소 루트의 `requirements.txt`를 보고 Python 의존성(예:
 
 - 브라우저 -> Vercel(`api/analyze`, `api/report`) -> AI 서버(FastAPI)
 - Vercel은 웹페이지/중계만 담당하고, OCR+AI 연산은 AI 서버가 담당합니다.
+- **백엔드 연결이 막히는 환경(예: 학교 네트워크)** 에서는 `start_cloudflare.sh` 기반의 Cloudflare Tunnel을 기본 권장합니다.
 
 ### Vercel 환경변수
 - `AI_BACKEND_URL`: AI 서버 주소 (예: `https://your-ai.example.com`)

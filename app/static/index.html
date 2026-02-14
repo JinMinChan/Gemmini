@@ -271,8 +271,8 @@
       </div>
       <div class="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <div>
-          연결 상태:
-          <span id="shareStatus" class="ml-1 font-semibold text-rose-300">공유 안함</span>
+          서버 상태:
+          <span id="serverStatus" class="ml-1 font-semibold text-slate-200">확인 중</span>
         </div>
       </div>
     </header>
@@ -311,7 +311,7 @@
         </div>
         <div class="mt-4 rounded-lg border border-slate-700/80 bg-slate-900/70 p-3">
           <div class="text-sm font-semibold text-sky-100">버그 제보하기</div>
-          <p class="mt-1 text-xs text-slate-300">버그나 개선점을 제보해주시면 감사하겠습니다!</p>
+          <p class="mt-1 text-xs text-slate-300">버그 제보시 버그 수정을 위해 이미지와 AI 결과가 서버에 저장됩니다.</p>
           <textarea
             id="bugReportInput"
             class="mt-2 h-24 w-full rounded-md border border-slate-700 bg-slate-950/85 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/70"
@@ -334,6 +334,32 @@
 		            <li>공지사항을 불러오는 중입니다...</li>
 		          </ul>
 		        </div>
+
+        <div class="mt-3 rounded-lg border border-slate-700/80 bg-slate-900/70 p-3">
+          <div class="text-sm font-semibold text-sky-100">마음의 편지</div>
+
+          <div
+            id="letterList"
+            class="mt-2 max-h-56 overflow-auto rounded-md border border-slate-700 bg-slate-950/70 p-2 text-xs text-slate-200"
+          >
+            <div class="text-slate-400">불러오는 중...</div>
+          </div>
+
+          <textarea
+            id="letterInput"
+            class="mt-2 h-20 w-full rounded-md border border-slate-700 bg-slate-950/85 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/70"
+            placeholder="예: 젬미나이 때문에 10겁작이 사라졌어요!"
+          ></textarea>
+          <div class="mt-2 flex items-center justify-between gap-2">
+            <button
+              id="letterSendBtn"
+              class="glow-btn rounded-lg border border-cyan-400/60 bg-cyan-400/15 px-3 py-2 text-xs font-semibold text-cyan-100"
+            >
+              남기기
+            </button>
+            <div id="letterStatus" class="hidden text-xs"></div>
+          </div>
+        </div>
 	      </div>
 
       <div class="panel p-4">
@@ -640,23 +666,25 @@
 		          const roleSelect = document.getElementById("roleSelect");
 		          const gemTypeSelect = document.getElementById("gemTypeSelect");
 
-    const shareStatus = document.getElementById("shareStatus");
+    const serverStatus = document.getElementById("serverStatus");
     const actionText = document.getElementById("actionText");
     const successProbText = document.getElementById("successProbText");
     const rerollsText = document.getElementById("rerollsText");
     const countText = document.getElementById("countText");
     const costText = document.getElementById("costText");
     const optionsGrid = document.getElementById("optionsGrid");
+    const letterList = document.getElementById("letterList");
+    const letterInput = document.getElementById("letterInput");
+    const letterSendBtn = document.getElementById("letterSendBtn");
+    const letterStatus = document.getElementById("letterStatus");
 
 			    const currentSumEl = document.getElementById("currentSum");
 			    const targetSumEl = document.getElementById("targetSum");
 
 	      const DEFAULT_NOTICE_ITEMS = [
-	        "제보해주신 버그들을 순차적으로 해결중입니다. 피드백 항상 감사드립니다!",
-	        "2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.",
-	        "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식(OCR) 버그가 발생하고 있습니다.",
+	        "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식 버그가 발생하고 있습니다.",
 	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
-	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역(옵션/리롤/가공횟수/골드)을 드래그로 조정할 수 있습니다.",
+	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역을 드래그로 조정할 수 있습니다.",
 	      ];
 
 	      function renderNoticeItems(items) {
@@ -688,6 +716,138 @@
 	          // Ignore notice failures.
 	        }
 	      }
+
+      function setServerStatusBadge(ok) {
+        if (!serverStatus) return;
+        if (ok === true) {
+          serverStatus.textContent = "서버 정상";
+          serverStatus.className = "ml-1 font-semibold text-emerald-300";
+          return;
+        }
+        if (ok === false) {
+          serverStatus.textContent = "서버 점검중";
+          serverStatus.className = "ml-1 font-semibold text-amber-300";
+          return;
+        }
+        serverStatus.textContent = "확인 중";
+        serverStatus.className = "ml-1 font-semibold text-slate-200";
+      }
+
+      async function refreshServerStatus() {
+        setServerStatusBadge(null);
+        const health = await checkBackendHealthy();
+        setServerStatusBadge(Boolean(health.ok));
+        return health;
+      }
+
+      function setLetterUiStatus(message, tone = "info") {
+        if (!letterStatus) return;
+        const text = String(message || "").trim();
+        if (!text) {
+          letterStatus.textContent = "";
+          letterStatus.className = "hidden text-xs";
+          return;
+        }
+        let cls = "text-slate-300";
+        if (tone === "ok") cls = "text-emerald-300";
+        if (tone === "error") cls = "text-rose-300";
+        letterStatus.textContent = text;
+        letterStatus.className = `text-xs ${cls}`;
+      }
+
+      function formatLocalKoreanTime(isoString) {
+        const raw = String(isoString || "").trim();
+        if (!raw) return "";
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return raw.replace("T", " ").slice(0, 19);
+        try {
+          return d.toLocaleString("ko-KR", { hour12: false });
+        } catch (_err) {
+          return raw.replace("T", " ").slice(0, 19);
+        }
+      }
+
+      function renderLetters(items) {
+        if (!letterList) return;
+        const list = Array.isArray(items) ? items : [];
+        if (list.length === 0) {
+          letterList.innerHTML = '<div class="text-slate-400">아직 글이 없어요. 첫 글을 남겨주세요!</div>';
+          return;
+        }
+
+        letterList.innerHTML = list
+          .slice(0, 40)
+          .map((it) => {
+            const msg = escapeHtml(String(it?.message || "").trim() || "(내용 없음)");
+            const createdAt = formatLocalKoreanTime(it?.created_at);
+            const reply = String(it?.reply || "").trim();
+            const replyHtml = reply
+              ? `<div class="mt-2 rounded-md border border-slate-800 bg-slate-950/60 px-2 py-2 text-[11px] text-slate-200">
+                   <div class="font-semibold text-sky-200">답글</div>
+                   <div class="mt-1 whitespace-pre-wrap leading-relaxed text-slate-200">${escapeHtml(reply)}</div>
+                 </div>`
+              : "";
+            return `
+              <div class="rounded-md border border-slate-800 bg-slate-950/60 px-2 py-2">
+                <div class="flex items-baseline justify-between gap-2">
+                  <div class="whitespace-pre-wrap leading-relaxed">${msg}</div>
+                  <div class="shrink-0 text-[10px] text-slate-500">${escapeHtml(createdAt)}</div>
+                </div>
+                ${replyHtml}
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      async function loadLetters() {
+        if (!letterList) return;
+        try {
+          const res = await fetch("/api/letters?limit=30", { method: "GET", cache: "no-store" });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body || body.ok !== true) return;
+          renderLetters(body.items || []);
+        } catch (_err) {
+          // ignore
+        }
+      }
+
+      async function submitLetter() {
+        if (!letterInput || !letterSendBtn) return;
+        const msg = String(letterInput.value || "").trim();
+        if (!msg) {
+          setLetterUiStatus("내용을 입력해주세요.", "error");
+          return;
+        }
+        if (msg.length > 600) {
+          setLetterUiStatus("너무 길어요. (최대 600자)", "error");
+          return;
+        }
+
+        letterSendBtn.disabled = true;
+        setLetterUiStatus("저장 중...", "info");
+        try {
+          const fd = new FormData();
+          fd.append("message", msg);
+          if (state.clientId) {
+            fd.append("client_id", String(state.clientId));
+          }
+          const res = await fetch("/api/letters", { method: "POST", body: fd });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body || body.ok !== true) {
+            const detail = body?.detail || body?.error || res.statusText || "unknown";
+            throw new Error(String(detail));
+          }
+          letterInput.value = "";
+          setLetterUiStatus("저장되었습니다. 감사합니다!", "ok");
+          await loadLetters();
+        } catch (err) {
+          const msg2 = err && typeof err === "object" && "message" in err ? String(err.message || err) : String(err);
+          setLetterUiStatus(msg2 || "저장 실패", "error");
+        } finally {
+          letterSendBtn.disabled = false;
+        }
+      }
 
 	        function makeDefaultUiState(overrides = {}) {
 	          return {
@@ -1075,8 +1235,6 @@
       shareStopBtn.disabled = !isSharing;
       analyzeBtn.disabled = !isSharing;
       if (roiAdjustBtn) roiAdjustBtn.disabled = !isSharing;
-      shareStatus.textContent = isSharing ? "공유 중" : "공유 안함";
-      shareStatus.className = `ml-1 font-semibold ${isSharing ? "text-emerald-300" : "text-rose-300"}`;
     }
 
     async function checkBackendHealthy() {
@@ -1099,11 +1257,9 @@
         return;
       }
 
-      const health = await checkBackendHealthy();
+      const health = await refreshServerStatus();
       if (!health.ok) {
         alert("서버 점검중입니다. 기다려주셔서 감사합니다.");
-        shareStatus.textContent = "서버 점검중";
-        shareStatus.className = "ml-1 font-semibold text-amber-300";
         return;
       }
 
@@ -1126,8 +1282,6 @@
         setSharingUI(true);
       } catch (err) {
         setSharingUI(false);
-        shareStatus.textContent = "공유 실패";
-        shareStatus.className = "ml-1 font-semibold text-rose-300";
       }
     }
 
@@ -2068,6 +2222,9 @@
 	    if (bugReportSendBtn) {
 	      bugReportSendBtn.addEventListener("click", submitBugReport);
 	    }
+      if (letterSendBtn) {
+        letterSendBtn.addEventListener("click", submitLetter);
+      }
 
 	        bindRoleGemControls();
 			    bindStatControls();
@@ -2075,6 +2232,10 @@
           bindRoiAdjustControls();
 	        renderNoticeItems(DEFAULT_NOTICE_ITEMS);
 	        loadNotice();
+        loadLetters();
+        refreshServerStatus();
+        setInterval(loadLetters, 30000);
+        setInterval(refreshServerStatus, 30000);
 		    setSharingUI(false);
 		    renderAll();
   </script>

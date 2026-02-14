@@ -40,6 +40,10 @@ DEFAULT_NOTICE_ITEMS: List[str] = [
     "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
 ]
 
+LETTERS_MAX_CHARS = int(os.getenv("GEMMINI_LETTERS_MAX_CHARS", "600"))
+LETTERS_LIST_DEFAULT_LIMIT = int(os.getenv("GEMMINI_LETTERS_LIST_DEFAULT_LIMIT", "30"))
+LETTERS_LIST_MAX_LIMIT = int(os.getenv("GEMMINI_LETTERS_LIST_MAX_LIMIT", "80"))
+
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -684,6 +688,97 @@ def _persist_bug_report(
     }
     (message_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return f"records/{date_dir}/message/{json_name}"
+
+
+_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _letters_dir_for_date_bucket(dt: datetime, *, create: bool = True) -> tuple[str, Path]:
+    dt_local = dt.astimezone()
+    date_dir = dt_local.strftime("%Y-%m-%d")
+    base_dir = RECORDS_DIR / date_dir
+    letters_dir = base_dir / "letters"
+    if create:
+        letters_dir.mkdir(parents=True, exist_ok=True)
+    return date_dir, letters_dir
+
+
+def _persist_letter(
+    *,
+    client_ip: str,
+    client_id: Optional[str],
+    message: str,
+    user_agent: Optional[str],
+) -> dict:
+    dt = datetime.now(timezone.utc).astimezone()
+    date_dir, letters_dir = _letters_dir_for_date_bucket(dt, create=True)
+    created_at = dt.isoformat()
+    stamp = dt.strftime("%Y-%m-%d_%H-%M-%S_%f")
+    suffix = secrets.token_hex(2)  # 4 hex chars
+    letter_id = f"{stamp}_{suffix}"
+    json_name = f"{letter_id}.json"
+
+    payload = {
+        "id": letter_id,
+        "created_at": created_at,
+        "client_ip": str(client_ip),
+        "client_id": str(client_id) if client_id else None,
+        "user_agent": str(user_agent or ""),
+        "message": str(message),
+        # Admin can add replies later by editing this file (or via future admin tooling).
+        "reply": None,
+        "replied_at": None,
+    }
+    (letters_dir / json_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "id": letter_id,
+        "created_at": created_at,
+        "path": f"records/{date_dir}/letters/{json_name}",
+    }
+
+
+def _letter_public_view(obj: dict) -> dict:
+    return _to_builtin(
+        {
+            "id": obj.get("id") or None,
+            "created_at": obj.get("created_at") or None,
+            "message": obj.get("message") or "",
+            "reply": obj.get("reply") or None,
+            "replied_at": obj.get("replied_at") or None,
+        }
+    )
+
+
+def _list_letters(*, limit: int) -> list[dict]:
+    out: list[dict] = []
+    lim = int(limit)
+    if lim <= 0:
+        return out
+
+    try:
+        date_dirs = [
+            p for p in RECORDS_DIR.iterdir() if p.is_dir() and _DATE_DIR_RE.match(p.name or "")
+        ]
+    except FileNotFoundError:
+        return out
+
+    for day_dir in sorted(date_dirs, key=lambda p: p.name, reverse=True):
+        letters_dir = day_dir / "letters"
+        if not letters_dir.exists():
+            continue
+        files = sorted(letters_dir.glob("*.json"), key=lambda p: p.name, reverse=True)
+        for fp in files:
+            try:
+                raw = fp.read_text(encoding="utf-8")
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    out.append(_letter_public_view(obj))
+            except Exception:
+                continue
+            if len(out) >= lim:
+                return out
+
+    return out
 
 
 def _parse_count(count_text: Optional[str]) -> tuple[Optional[int], Optional[int]]:
@@ -1676,6 +1771,51 @@ async def health() -> dict:
 @app.get("/api/notice")
 async def notice() -> dict:
     return {"ok": True, **_load_notice_payload()}
+
+
+@app.get("/api/letters")
+async def list_letters(
+    request: Request,
+    limit: int = LETTERS_LIST_DEFAULT_LIMIT,
+    client_id: Optional[str] = None,
+) -> dict:
+    _verify_proxy_secret(request)
+    ip = _client_ip(request)
+    rate_key = f"{_rate_limit_key(client_ip=ip, client_id=client_id)}:letters_get"
+    _check_rate_limit(rate_key)
+
+    lim = int(limit)
+    if lim <= 0:
+        lim = int(LETTERS_LIST_DEFAULT_LIMIT)
+    lim = max(1, min(int(LETTERS_LIST_MAX_LIMIT), lim))
+    items = _list_letters(limit=lim)
+    return {"ok": True, "items": items, "meta": {"limit": lim, "returned": len(items)}}
+
+
+@app.post("/api/letters")
+async def submit_letter(
+    request: Request,
+    message: str = Form(...),
+    client_id: Optional[str] = Form(None),
+) -> dict:
+    _verify_proxy_secret(request)
+    ip = _client_ip(request)
+    rate_key = f"{_rate_limit_key(client_ip=ip, client_id=client_id)}:letters_post"
+    _check_rate_limit(rate_key)
+
+    text = str(message or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="message is required")
+    if len(text) > int(LETTERS_MAX_CHARS):
+        raise HTTPException(status_code=400, detail=f"message too long (max {int(LETTERS_MAX_CHARS)} chars)")
+
+    saved = _persist_letter(
+        client_ip=ip,
+        client_id=_sanitize_rate_key(client_id) or None,
+        message=text,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"ok": True, **_to_builtin(saved)}
 
 
 @app.post("/api/report")
