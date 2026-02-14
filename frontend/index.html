@@ -303,15 +303,13 @@
           </div>
         </div>
 
-	        <div class="mt-3 rounded-lg border border-slate-700/80 bg-slate-900/70 p-3">
-	          <div class="text-sm font-semibold text-sky-100">공지사항</div>
-	          <ul class="mt-2 space-y-1 text-xs text-slate-300">
-	            <li>제보해주신 버그들을 순차적으로 해결중입니다. 피드백 항상 감사드립니다!</li>
-              <li>2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.</li>
-	            <li>2026-02-14: 다양한 해상도에서 화면인식이 가능하도록 개선했습니다.</li>
-	          </ul>
-	        </div>
-      </div>
+		        <div class="mt-3 rounded-lg border border-slate-700/80 bg-slate-900/70 p-3">
+		          <div class="text-sm font-semibold text-sky-100">공지사항</div>
+		          <ul id="noticeList" class="mt-2 space-y-1 text-xs text-slate-300">
+		            <li>공지사항을 불러오는 중입니다...</li>
+		          </ul>
+		        </div>
+	      </div>
 
       <div class="panel p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -448,21 +446,33 @@
               <div id="successProbText" class="mt-1 text-lg font-extrabold text-rose-200">-</div>
             </div>
           </div>
-          <div class="mt-3 grid grid-cols-3 gap-2">
-            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
-              <div class="text-[11px] uppercase tracking-wide text-slate-400">리롤</div>
-              <div id="rerollsText" class="text-lg font-bold text-slate-100">-</div>
-            </div>
-            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
-              <div class="text-[11px] uppercase tracking-wide text-slate-400">가공횟수</div>
-              <div id="countText" class="text-lg font-bold text-slate-100">-</div>
-            </div>
-            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
-              <div class="text-[11px] uppercase tracking-wide text-slate-400">가공비용</div>
-              <div id="costText" class="text-lg font-bold text-slate-100">-</div>
-            </div>
-          </div>
-        </div>
+	          <div class="mt-3 grid grid-cols-3 gap-2">
+	            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
+	              <div class="text-[11px] uppercase tracking-wide text-slate-400">리롤</div>
+	              <div class="mt-1 flex items-center justify-center gap-2">
+	                <button class="mini-control" data-adjust="rerolls" data-delta="-1">-</button>
+	                <div id="rerollsText" class="min-w-[2ch] text-lg font-bold text-slate-100">-</div>
+	                <button class="mini-control" data-adjust="rerolls" data-delta="1">+</button>
+	              </div>
+	            </div>
+	            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
+	              <div class="text-[11px] uppercase tracking-wide text-slate-400">가공횟수</div>
+	              <div class="mt-1 flex items-center justify-center gap-2">
+	                <button class="mini-control" data-adjust="attempts_left" data-delta="-1">-</button>
+	                <div id="countText" class="min-w-[2ch] text-lg font-bold text-slate-100">-</div>
+	                <button class="mini-control" data-adjust="attempts_left" data-delta="1">+</button>
+	              </div>
+	            </div>
+	            <div class="rounded-md border border-slate-700 bg-slate-950/85 px-2 py-2 text-center">
+	              <div class="text-[11px] uppercase tracking-wide text-slate-400">가공비용</div>
+	              <div class="mt-1 flex items-center justify-center gap-2">
+	                <button class="mini-control" data-adjust="cost_state" data-delta="-1">-</button>
+	                <div id="costText" class="min-w-[5ch] text-lg font-bold text-slate-100">-</div>
+	                <button class="mini-control" data-adjust="cost_state" data-delta="1">+</button>
+	              </div>
+	            </div>
+	          </div>
+	        </div>
       </div>
     </section>
   </main>
@@ -473,12 +483,13 @@
 				    const analyzeBtn = document.getElementById("analyzeBtn");
 				    const resetBtn = document.getElementById("resetBtn");
 				    const screenVideo = document.getElementById("screenVideo");
-			    const bugReportInput = document.getElementById("bugReportInput");
-			    const bugReportSendBtn = document.getElementById("bugReportSendBtn");
-			    const bugReportStatus = document.getElementById("bugReportStatus");
-				    const analyzeError = document.getElementById("analyzeError");
-	          const roleSelect = document.getElementById("roleSelect");
-	          const gemTypeSelect = document.getElementById("gemTypeSelect");
+				    const bugReportInput = document.getElementById("bugReportInput");
+				    const bugReportSendBtn = document.getElementById("bugReportSendBtn");
+				    const bugReportStatus = document.getElementById("bugReportStatus");
+				    const noticeList = document.getElementById("noticeList");
+					    const analyzeError = document.getElementById("analyzeError");
+		          const roleSelect = document.getElementById("roleSelect");
+		          const gemTypeSelect = document.getElementById("gemTypeSelect");
 
     const shareStatus = document.getElementById("shareStatus");
     const actionText = document.getElementById("actionText");
@@ -488,13 +499,50 @@
     const costText = document.getElementById("costText");
     const optionsGrid = document.getElementById("optionsGrid");
 
-	    const currentSumEl = document.getElementById("currentSum");
-	    const targetSumEl = document.getElementById("targetSum");
+			    const currentSumEl = document.getElementById("currentSum");
+			    const targetSumEl = document.getElementById("targetSum");
 
-        function makeDefaultUiState(overrides = {}) {
-          return {
-            rerolls: 0,
-            attempts_left: 0,
+	      const DEFAULT_NOTICE_ITEMS = [
+	        "제보해주신 버그들을 순차적으로 해결중입니다. 피드백 항상 감사드립니다!",
+	        "2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.",
+	        "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식(OCR) 버그가 발생하고 있습니다.",
+	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
+	      ];
+
+	      function renderNoticeItems(items) {
+	        if (!noticeList) return;
+	        noticeList.innerHTML = "";
+	        const list = Array.isArray(items) ? items : [];
+	        if (list.length === 0) {
+	          const li = document.createElement("li");
+	          li.textContent = "공지사항이 없습니다.";
+	          noticeList.appendChild(li);
+	          return;
+	        }
+	        for (const raw of list) {
+	          const li = document.createElement("li");
+	          li.textContent = String(raw || "").trim();
+	          noticeList.appendChild(li);
+	        }
+	      }
+
+	      async function loadNotice() {
+	        // Server-side notice so we can update without redeploying the frontend.
+	        try {
+	          const res = await fetch("/api/notice", { method: "GET", cache: "no-store" });
+	          const body = await res.json().catch(() => ({}));
+	          if (!res.ok || !body || body.ok !== true) return;
+	          const items = Array.isArray(body.items) ? body.items : [];
+	          if (items.length) renderNoticeItems(items);
+	        } catch (_err) {
+	          // Ignore notice failures.
+	        }
+	      }
+
+	        function makeDefaultUiState(overrides = {}) {
+	          return {
+	            rerolls: 0,
+	            attempts_left: 0,
             cost_state: 0,
             options: [],
             role: "dealer",
@@ -503,27 +551,32 @@
           };
         }
 
-			    const state = {
-			      stream: null,
-            clientId: null,
-		      current: {
-		        willpower: 1,
-		        points: 1,
-		        effect1_level: 1,
-		        effect2_level: 1,
-	      },
-		      target: {
-		        willpower: 4,
-		        points: 4,
-		        effect1_level: 4,
-		        effect2_level: 4,
+				    const state = {
+				      stream: null,
+	            clientId: null,
+			      current: {
+			        willpower: 1,
+			        points: 1,
+			        effect1_level: 1,
+			        effect2_level: 1,
 		      },
-		      uiState: makeDefaultUiState(),
-		      ocrCount: null,
-			      lastResponse: null,
-				      successProb: null,
-				      lastError: null,
-				    };
+			      target: {
+			        willpower: 4,
+			        points: 4,
+			        effect1_level: 4,
+			        effect2_level: 4,
+			      },
+			      uiState: makeDefaultUiState(),
+	          uiOverride: {
+	            rerolls: false,
+	            attempts_left: false,
+	            cost_state: false,
+	          },
+			      ocrCount: null,
+				      lastResponse: null,
+					      successProb: null,
+					      lastError: null,
+					    };
 
           const CLIENT_ID_STORAGE_KEY = "gemmini_client_id";
 
@@ -548,23 +601,28 @@
 
           state.clientId = getOrCreateClientId();
 
-		    function resetGemState() {
-		      state.current = {
-		        willpower: 1,
-		        points: 1,
-		        effect1_level: 1,
-		        effect2_level: 1,
-		      };
-		      state.uiState = makeDefaultUiState({
-            role: state.uiState?.role || "dealer",
-            gem_type: state.uiState?.gem_type || "stable",
-          });
-		      state.ocrCount = null;
-			      state.lastResponse = null;
-			      state.successProb = null;
-		      state.lastError = null;
-		      renderAll();
-		    }
+			    function resetGemState() {
+			      state.current = {
+			        willpower: 1,
+			        points: 1,
+			        effect1_level: 1,
+			        effect2_level: 1,
+			      };
+			      state.uiState = makeDefaultUiState({
+	            role: state.uiState?.role || "dealer",
+	            gem_type: state.uiState?.gem_type || "stable",
+	          });
+	          state.uiOverride = {
+	            rerolls: false,
+	            attempts_left: false,
+	            cost_state: false,
+	          };
+			      state.ocrCount = null;
+				      state.lastResponse = null;
+				      state.successProb = null;
+			      state.lastError = null;
+			      renderAll();
+			    }
 
 	    function clampStat(v) {
 	      const n = Number(v);
@@ -577,17 +635,60 @@
       return Number.isFinite(n) ? Math.trunc(n) : fallback;
     }
 
-    function costFromState(costState) {
-      if (costState <= -1) return 0;
-      if (costState === 0) return 900;
-      if (costState >= 1) return 1800;
-      return 900;
-    }
+	    function costFromState(costState) {
+	      if (costState <= -1) return 0;
+	      if (costState === 0) return 900;
+	      if (costState >= 1) return 1800;
+	      return 900;
+	    }
 
-    function actionKo(actionName) {
-      if (!actionName) return "-";
-      const map = {
-        process: "가공",
+	    function clampIntRange(v, lo, hi) {
+	      const n = asInt(v, lo);
+	      return Math.max(lo, Math.min(hi, n));
+	    }
+
+	    function adjustSummaryValue(field, delta) {
+	      if (!state.uiState || !state.uiOverride) return;
+	      const d = asInt(delta, 0);
+	      if (!d) return;
+
+	      if (field === "rerolls") {
+	        const next = clampIntRange(asInt(state.uiState.rerolls, 0) + d, 0, 5);
+	        state.uiState.rerolls = next;
+	        state.uiOverride.rerolls = true;
+	      } else if (field === "attempts_left") {
+	        const next = clampIntRange(asInt(state.uiState.attempts_left, 0) + d, 0, 9);
+	        state.uiState.attempts_left = next;
+	        state.uiOverride.attempts_left = true;
+	        // Prefer the manual integer display over OCR ratio text once user edits.
+	        state.ocrCount = null;
+	      } else if (field === "cost_state") {
+	        const next = clampIntRange(asInt(state.uiState.cost_state, 0) + d, -1, 1);
+	        state.uiState.cost_state = next;
+	        state.uiOverride.cost_state = true;
+	      } else {
+	        return;
+	      }
+
+	      renderAll();
+	    }
+
+	    function bindSummaryAdjustControls() {
+	      document.querySelectorAll("button[data-adjust]").forEach((btn) => {
+	        if (btn.dataset.bound === "1") return;
+	        btn.dataset.bound = "1";
+	        btn.addEventListener("click", () => {
+	          const field = String(btn.dataset.adjust || "");
+	          const delta = asInt(btn.dataset.delta, 0);
+	          adjustSummaryValue(field, delta);
+	        });
+	      });
+	    }
+
+	    function actionKo(actionName) {
+	      if (!actionName) return "-";
+	      const map = {
+	        process: "가공",
         reroll: "리롤",
         stop: "가공 중단",
       };
@@ -681,12 +782,11 @@
       });
     }
 
-    function renderSummaryPanels() {
-      rerollsText.textContent = String(asInt(state.uiState.rerolls, 0));
-      const countDisplay = state.ocrCount || (state.uiState.attempts_left != null ? `${asInt(state.uiState.attempts_left, 0)}` : "-");
-      countText.textContent = countDisplay;
-      costText.textContent = `${costFromState(asInt(state.uiState.cost_state, 0))}G`;
-    }
+	    function renderSummaryPanels() {
+	      rerollsText.textContent = String(asInt(state.uiState.rerolls, 0));
+	      countText.textContent = String(asInt(state.uiState.attempts_left, 0));
+	      costText.textContent = `${costFromState(asInt(state.uiState.cost_state, 0))}G`;
+	    }
 
     function optionStyleClass(opt) {
       const category = String(opt?.category || "").toLowerCase();
@@ -900,8 +1000,10 @@
       { label: "option3", x: 1360.36, y: 796.02, w: 158.72, h: 113.83 },
       { label: "option4", x: 1512.67, y: 795.22, w: 152.31, h: 109.02 },
       { label: "possible", x: 1669.79, y: 794.41, w: 126.66, h: 59.32 },
-      { label: "cost", x: 1579.21, y: 887.40, w: 96.20, h: 52.91 },
-      { label: "count", x: 1476.60, y: 1022.08, w: 64.13, h: 49.70 },
+      // NOTE: cost/count boxes are slightly enlarged to avoid clipping digits
+      // under different UI scales (e.g. "1,800" losing the leading '1').
+      { label: "cost", x: 1579.21, y: 887.40, w: 150.00, h: 70.00 },
+      { label: "count", x: 1476.60, y: 1022.08, w: 120.00, h: 80.00 },
     ];
     const CAPTURE_MAX_LONG_EDGE = 1920;
     const CAPTURE_TARGET_BYTES = 1_600_000; // ~1.6MB
@@ -1087,16 +1189,32 @@
 			      state.successProb = null;
 			      state.lastError = null;
 
-			      try {
-			        const tCapture0 = performance.now();
-			        const formData = new FormData();
-	            if (state.clientId) {
-	              formData.append("client_id", String(state.clientId));
-	            }
-			        let captureMode = CAPTURE_PIPELINE;
-			        let roiSchemaVersion = ROI_SCHEMA_VERSION;
-			        let capture = null;
-			        let blob = null;
+				      try {
+				        const tCapture0 = performance.now();
+				        const formData = new FormData();
+		            if (state.clientId) {
+		              formData.append("client_id", String(state.clientId));
+		            }
+		            const manualOverrides = {};
+		            if (state.uiOverride?.rerolls) {
+		              const v = Math.max(0, Math.min(5, asInt(state.uiState?.rerolls, 0)));
+		              formData.append("override_rerolls", String(v));
+		              manualOverrides.rerolls = v;
+		            }
+		            if (state.uiOverride?.attempts_left) {
+		              const v = Math.max(0, Math.min(9, asInt(state.uiState?.attempts_left, 0)));
+		              formData.append("override_attempts_left", String(v));
+		              manualOverrides.attempts_left = v;
+		            }
+		            if (state.uiOverride?.cost_state) {
+		              const v = Math.max(-1, Math.min(1, asInt(state.uiState?.cost_state, 0)));
+		              formData.append("override_cost_state", String(v));
+		              manualOverrides.cost_state = v;
+		            }
+				        let captureMode = CAPTURE_PIPELINE;
+				        let roiSchemaVersion = ROI_SCHEMA_VERSION;
+				        let capture = null;
+				        let blob = null;
 		        let uploadBytes = 0;
 		        let roiLabels = [];
 		        let roiCount = 0;
@@ -1137,24 +1255,25 @@
 	            formData.append("role", String(state.uiState?.role || "dealer"));
 	            formData.append("gem_type", String(state.uiState?.gem_type || "stable"));
 	            formData.append("roi_schema_version", roiSchemaVersion);
-			        formData.append(
-			          "client_debug",
-			          JSON.stringify({
-			            capture_ms: Math.round((tCapture1 - tCapture0) * 100) / 100,
-	                capture_pipeline: captureMode,
-	                roi_schema_version: roiSchemaVersion,
-		            video_w: capture.source_w || screenVideo.videoWidth || null,
-		            video_h: capture.source_h || screenVideo.videoHeight || null,
-		            upload_w: capture.upload_w || null,
-		            upload_h: capture.upload_h || null,
-		            upload_bytes: uploadBytes || null,
-		            jpeg_quality: capture.jpeg_quality || null,
-		            letterbox: capture.letterbox || null,
-	                roi_count: roiCount,
-	                roi_labels: roiLabels,
-	                roi_rects: roiRects,
-		          })
-		        );
+				        formData.append(
+				          "client_debug",
+				          JSON.stringify({
+				            capture_ms: Math.round((tCapture1 - tCapture0) * 100) / 100,
+		                capture_pipeline: captureMode,
+		                roi_schema_version: roiSchemaVersion,
+			            video_w: capture.source_w || screenVideo.videoWidth || null,
+			            video_h: capture.source_h || screenVideo.videoHeight || null,
+			            upload_w: capture.upload_w || null,
+			            upload_h: capture.upload_h || null,
+			            upload_bytes: uploadBytes || null,
+			            jpeg_quality: capture.jpeg_quality || null,
+			            letterbox: capture.letterbox || null,
+		                roi_count: roiCount,
+		                roi_labels: roiLabels,
+		                roi_rects: roiRects,
+		                manual_overrides: manualOverrides,
+			          })
+			        );
 
 			        const res = await fetch("/api/analyze", {
 			          method: "POST",
@@ -1175,14 +1294,23 @@
 		        if (captureMode === CAPTURE_PIPELINE && !hasCount1) {
 		          didRetry = true;
 		          const tRetry0 = performance.now();
-		          const retryForm = new FormData();
-		          if (state.clientId) {
-		            retryForm.append("client_id", String(state.clientId));
-		          }
-		          const retryCapture = await captureVideoFrameBlob();
-		          const retryBlob = retryCapture.blob;
-		          const retryFileName = `capture_retry_${Date.now()}.jpg`;
-		          retryForm.append("image", retryBlob, retryFileName);
+			          const retryForm = new FormData();
+			          if (state.clientId) {
+			            retryForm.append("client_id", String(state.clientId));
+			          }
+			          if (state.uiOverride?.rerolls) {
+			            retryForm.append("override_rerolls", String(Math.max(0, Math.min(5, asInt(state.uiState?.rerolls, 0)))));
+			          }
+			          if (state.uiOverride?.attempts_left) {
+			            retryForm.append("override_attempts_left", String(Math.max(0, Math.min(9, asInt(state.uiState?.attempts_left, 0)))));
+			          }
+			          if (state.uiOverride?.cost_state) {
+			            retryForm.append("override_cost_state", String(Math.max(-1, Math.min(1, asInt(state.uiState?.cost_state, 0)))));
+			          }
+			          const retryCapture = await captureVideoFrameBlob();
+			          const retryBlob = retryCapture.blob;
+			          const retryFileName = `capture_retry_${Date.now()}.jpg`;
+			          retryForm.append("image", retryBlob, retryFileName);
 		          const tRetry1 = performance.now();
 		          retryForm.append("willpower", String(state.current.willpower));
 		          retryForm.append("points", String(state.current.points));
@@ -1195,26 +1323,27 @@
 		          retryForm.append("role", String(state.uiState?.role || "dealer"));
 		          retryForm.append("gem_type", String(state.uiState?.gem_type || "stable"));
 		          retryForm.append("roi_schema_version", FALLBACK_ROI_SCHEMA_VERSION);
-		          retryForm.append(
-		            "client_debug",
-		            JSON.stringify({
-		              capture_ms: Math.round((tRetry1 - tRetry0) * 100) / 100,
-		              capture_pipeline: FALLBACK_CAPTURE_PIPELINE,
-		              roi_schema_version: FALLBACK_ROI_SCHEMA_VERSION,
-		              video_w: retryCapture.source_w || screenVideo.videoWidth || null,
-		              video_h: retryCapture.source_h || screenVideo.videoHeight || null,
-		              upload_w: retryCapture.upload_w || null,
-		              upload_h: retryCapture.upload_h || null,
-		              upload_bytes: retryBlob?.size || null,
-		              jpeg_quality: retryCapture.jpeg_quality || null,
-		              auto_retry: true,
-		              retry_reason: "missing_count",
-		              retry_of: body1?.record?.id || null,
-		              first_capture_pipeline: captureMode,
-		              first_roi_schema_version: roiSchemaVersion,
-		              first_letterbox: capture?.letterbox || null,
-		            })
-		          );
+			          retryForm.append(
+			            "client_debug",
+			            JSON.stringify({
+			              capture_ms: Math.round((tRetry1 - tRetry0) * 100) / 100,
+			              capture_pipeline: FALLBACK_CAPTURE_PIPELINE,
+			              roi_schema_version: FALLBACK_ROI_SCHEMA_VERSION,
+			              video_w: retryCapture.source_w || screenVideo.videoWidth || null,
+			              video_h: retryCapture.source_h || screenVideo.videoHeight || null,
+			              upload_w: retryCapture.upload_w || null,
+			              upload_h: retryCapture.upload_h || null,
+			              upload_bytes: retryBlob?.size || null,
+			              jpeg_quality: retryCapture.jpeg_quality || null,
+			              auto_retry: true,
+			              retry_reason: "missing_count",
+			              retry_of: body1?.record?.id || null,
+			              first_capture_pipeline: captureMode,
+			              first_roi_schema_version: roiSchemaVersion,
+			              first_letterbox: capture?.letterbox || null,
+			              manual_overrides: manualOverrides,
+			            })
+			          );
 
 		          const res2 = await fetch("/api/analyze", {
 		            method: "POST",
@@ -1226,13 +1355,44 @@
 		              body2?.detail || body2?.error || (Object.keys(body2 || {}).length ? JSON.stringify(body2) : "");
 		            const suffix = detail ? `: ${detail}` : (res2.statusText ? `: ${res2.statusText}` : "");
 		            throw new Error(`분석 재시도 실패 (HTTP ${res2.status})${suffix}`);
-		          }
-		          body = body2;
-		        }
+			          }
+			          body = body2;
+			        }
 
-		        state.lastResponse = body;
-		        state.successProb = body.goal_success?.success_prob ?? null;
-		        const gs = body.goal_success ?? null;
+			        // If homography fails and the OCR result also looks empty, the shared
+			        // screen is likely not the Lost Ark gem-processing UI (wrong window/tab).
+			        // Avoid updating the UI with bogus "0/7" -> stop recommendations.
+			        try {
+			          const hom = body?.debug?.homography;
+			          if (hom && hom.ok === false) {
+			            const reason = String(hom.reason || "");
+			            const optionsLen = Array.isArray(body.ui_state?.options) ? body.ui_state.options.length : 0;
+			            const countText = body?.ocr_result?.count;
+			            const costVal = body?.ocr_result?.cost;
+			            const possVal = body?.ocr_result?.possible;
+			            const looksEmpty =
+			              optionsLen === 0 && (costVal == null || costVal === 0) && (possVal == null || possVal === 0);
+			            const looksBadCount = typeof countText !== "string" || /^\s*0\s*\//.test(countText);
+			            const fatalReasons = new Set([
+			              "low_inliers",
+			              "few_good_matches",
+			              "no_target_features",
+			              "homography_failed",
+			              "missing_rois",
+			            ]);
+			            if (fatalReasons.has(reason) && looksEmpty && looksBadCount) {
+			              state.lastError =
+			                "공유한 화면에서 젬 가공 창을 찾지 못했습니다. 로스트아크(젬 가공 화면) 창을 선택해주세요.";
+			              return;
+			            }
+			          }
+			        } catch (_err) {
+			          // Best-effort guard; never fail analyze because of this check.
+			        }
+
+			        state.lastResponse = body;
+			        state.successProb = body.goal_success?.success_prob ?? null;
+			        const gs = body.goal_success ?? null;
 		        if (!gs) {
 		          state.lastError = "서버 응답에 성공 확률(goal_success)이 없습니다. 서버를 재시작/업데이트해주세요.";
 		        } else if (gs.success_prob == null) {
@@ -1382,6 +1542,9 @@
 
 	        bindRoleGemControls();
 			    bindStatControls();
+	        bindSummaryAdjustControls();
+	        renderNoticeItems(DEFAULT_NOTICE_ITEMS);
+	        loadNotice();
 		    setSharingUI(false);
 		    renderAll();
   </script>

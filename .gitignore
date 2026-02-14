@@ -18,6 +18,9 @@ test_data/
 
 # Generated debug outputs
 codex/roi_overlay_records/
+codex/roi_overlay_records_*/
+codex/_tmp_*/
+codex/bug_report_analysis_*.md
 
 # OS / editor noise
 .DS_Store

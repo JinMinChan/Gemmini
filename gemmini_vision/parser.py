@@ -139,10 +139,12 @@ class GameStateParser:
                             # NOTE: 기존 crop(아이콘+한글 일부 포함)에서는 회색 0회 가능 상태가
                             #       아이콘/한글에 끌려 '302' 같은 형태로 오인식되는 케이스가 있었다.
                             #       아이콘/한글을 최대한 배제하고 숫자 중심부만 취한다.
-                            x1 = int(w * 0.30)
-                            x2 = int(w * 0.50)
-                            y1 = int(h * 0.10)
-                            y2 = int(h * 0.95)
+                            # 실제 숫자는 아이콘 오른쪽에 더 가깝게 위치한다. 너무 오른쪽을 자르면
+                            # 숫자가 잘려 0으로 떨어지는 케이스가 많아서, 약간 왼쪽으로 이동한다.
+                            x1 = int(w * 0.15)
+                            x2 = int(w * 0.48)
+                            y1 = int(h * 0.15)
+                            y2 = int(h * 0.90)
                             if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
                                 num_roi = roi[y1:y2, x1:x2]
                         except Exception:
@@ -221,10 +223,10 @@ class GameStateParser:
                         num_roi = roi
                         try:
                             h, w = roi.shape[:2]
-                            x1 = int(w * 0.30)
-                            x2 = int(w * 0.50)
-                            y1 = int(h * 0.10)
-                            y2 = int(h * 0.95)
+                            x1 = int(w * 0.15)
+                            x2 = int(w * 0.48)
+                            y1 = int(h * 0.15)
+                            y2 = int(h * 0.90)
                             if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
                                 num_roi = roi[y1:y2, x1:x2]
                         except Exception:

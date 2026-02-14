@@ -30,6 +30,16 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 RECORDS_DIR = BASE_DIR / "records"
 RECORDS_DIR.mkdir(parents=True, exist_ok=True)
 
+NOTICE_PATH = Path(
+    str(os.getenv("GEMMINI_NOTICE_PATH", "") or "").strip() or (BASE_DIR / "notice.json")
+)
+DEFAULT_NOTICE_ITEMS: List[str] = [
+    "제보해주신 버그들을 순차적으로 해결중입니다. 피드백 항상 감사드립니다!",
+    "2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.",
+    "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식(OCR) 버그가 발생하고 있습니다.",
+    "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
+]
+
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -143,6 +153,54 @@ def _to_builtin(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_to_builtin(v) for v in value)
     return value
+
+
+def _load_notice_payload() -> dict:
+    """
+    Load the notice banner content.
+
+    We keep it file-backed so we can update announcements without redeploying
+    Vercel or restarting the AI server.
+    """
+    items: List[str] = list(DEFAULT_NOTICE_ITEMS)
+    source = "default"
+    updated_at: Optional[str] = None
+
+    path = NOTICE_PATH
+    try:
+        if path.exists():
+            source = "file"
+            ts = path.stat().st_mtime
+            updated_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            raw = path.read_text(encoding="utf-8").strip()
+            if raw:
+                if path.suffix.lower() == ".json":
+                    obj = json.loads(raw)
+                    if isinstance(obj, dict):
+                        cand = obj.get("items")
+                        if not isinstance(cand, list):
+                            cand = obj.get("notice")
+                        if isinstance(cand, list):
+                            items = [str(x).strip() for x in cand if str(x).strip()]
+                        elif isinstance(obj.get("text"), str):
+                            items = [x.strip() for x in str(obj["text"]).splitlines() if x.strip()]
+                    elif isinstance(obj, list):
+                        items = [str(x).strip() for x in obj if str(x).strip()]
+                else:
+                    items = [x.strip() for x in raw.splitlines() if x.strip()]
+    except Exception:
+        # Notice is best-effort; fall back to defaults.
+        items = list(DEFAULT_NOTICE_ITEMS)
+        source = "default"
+        updated_at = None
+
+    return {
+        "items": items,
+        "meta": {
+            "source": source,
+            "updated_at": updated_at,
+        },
+    }
 
 
 def _client_ip(request: Request) -> str:
@@ -1052,6 +1110,11 @@ class RLRuntime:
     def recommend(self, ocr_result: dict, ui_state: dict, manual_stats: dict) -> dict:
         count_left, count_right = _parse_count(ocr_result.get("count"))
 
+        # If the client manually corrected attempts_left, ignore OCR count parsing.
+        manual_override = ui_state.get("manual_override") if isinstance(ui_state, dict) else None
+        if isinstance(manual_override, dict) and manual_override.get("attempts_left") is not None:
+            count_left, count_right = None, None
+
         attempts_left = count_left if count_left is not None else self._safe_int(ui_state.get("attempts_left"), 0)
         attempts_left = max(0, attempts_left)
 
@@ -1610,6 +1673,11 @@ async def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/notice")
+async def notice() -> dict:
+    return {"ok": True, **_load_notice_payload()}
+
+
 @app.post("/api/report")
 async def submit_report(
     request: Request,
@@ -1733,6 +1801,9 @@ async def analyze_image(
     roi_schema_version: Optional[str] = Form(None),
     client_id: Optional[str] = Form(None),
     client_debug: Optional[str] = Form(None),
+    override_rerolls: Optional[int] = Form(None),
+    override_attempts_left: Optional[int] = Form(None),
+    override_cost_state: Optional[int] = Form(None),
 ) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
@@ -1889,6 +1960,29 @@ async def analyze_image(
     ui_state["role"] = selected_role
     ui_state["gem_type"] = selected_gem_type
     ui_state["roi_schema_version"] = selected_roi_schema
+
+    manual_override: dict[str, int] = {}
+    try:
+        if override_rerolls is not None:
+            v = int(override_rerolls)
+            v = max(0, min(5, v))
+            ui_state["rerolls"] = v
+            manual_override["rerolls"] = v
+        if override_attempts_left is not None:
+            v = int(override_attempts_left)
+            v = max(0, min(9, v))
+            ui_state["attempts_left"] = v
+            manual_override["attempts_left"] = v
+        if override_cost_state is not None:
+            v = int(override_cost_state)
+            v = max(-1, min(1, v))
+            ui_state["cost_state"] = v
+            manual_override["cost_state"] = v
+    except Exception:
+        manual_override = {}
+
+    if manual_override:
+        ui_state["manual_override"] = dict(manual_override)
     timings_ms["ui_state_convert"] = (time.perf_counter() - t_ui0) * 1000.0
 
     goal_success_prob: Optional[float] = None

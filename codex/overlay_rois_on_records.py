@@ -18,8 +18,9 @@ ROI_BOXES: List[Dict[str, Any]] = [
     {"label": "option3", "x": 1360.36, "y": 796.02, "w": 158.72, "h": 113.83},
     {"label": "option4", "x": 1512.67, "y": 795.22, "w": 152.31, "h": 109.02},
     {"label": "possible", "x": 1669.79, "y": 794.41, "w": 126.66, "h": 59.32},
-    {"label": "cost", "x": 1579.21, "y": 887.40, "w": 96.20, "h": 52.91},
-    {"label": "count", "x": 1476.60, "y": 1022.08, "w": 64.13, "h": 49.70},
+    # cost/count boxes are slightly enlarged to avoid clipping digits (UI scale variance).
+    {"label": "cost", "x": 1579.21, "y": 887.40, "w": 150.00, "h": 70.00},
+    {"label": "count", "x": 1476.60, "y": 1022.08, "w": 120.00, "h": 80.00},
 ]
 
 LABEL_COLORS_BGR: Dict[str, Tuple[int, int, int]] = {
@@ -263,4 +264,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -1,0 +1,46 @@
+export const config = { runtime: 'edge' };
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}
+
+function getBackendBase() {
+  const raw = (process.env.AI_BACKEND_URL || '').trim();
+  return raw.replace(/\/+$/, '');
+}
+
+export default async function handler(request) {
+  if (request.method !== 'GET') {
+    return json({ ok: false, detail: 'Method Not Allowed' }, 405);
+  }
+
+  const backend = getBackendBase();
+  if (!backend) {
+    return json({ ok: false, detail: 'AI_BACKEND_URL is not configured' }, 500);
+  }
+
+  try {
+    const headers = { 'cache-control': 'no-store' };
+    const shared = (process.env.API_SHARED_SECRET || '').trim();
+    if (shared) {
+      headers['x-gemmini-key'] = shared;
+    }
+
+    const upstream = await fetch(`${backend}/api/notice`, { method: 'GET', headers });
+    const text = await upstream.text();
+    return new Response(text, {
+      status: upstream.status,
+      headers: {
+        'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return json({ ok: false, detail: `proxy notice failed: ${msg}` }, 502);
+  }
+}
+

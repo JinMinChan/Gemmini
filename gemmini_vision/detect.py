@@ -52,8 +52,10 @@ ANNOTATION = {
         {"label": "option3", "x": 1360.36, "y": 796.02, "w": 158.72, "h": 113.83},
         {"label": "option4", "x": 1512.67, "y": 795.22, "w": 152.31, "h": 109.02},
         {"label": "possible", "x": 1669.79, "y": 794.41, "w": 126.66, "h": 59.32},
-        {"label": "cost",     "x": 1579.21, "y": 887.40, "w": 96.20,  "h": 52.91},
-        {"label": "count",    "x": 1476.60, "y": 1022.08,"w": 64.13,  "h": 49.70},
+        # NOTE: cost/count boxes are slightly enlarged to avoid clipping digits
+        # under different UI scales (e.g. "1,800" losing the leading '1').
+        {"label": "cost",     "x": 1579.21, "y": 887.40, "w": 150.00,  "h": 70.00},
+        {"label": "count",    "x": 1476.60, "y": 1022.08,"w": 120.00,  "h": 80.00},
     ]
 }
 
@@ -763,13 +765,26 @@ def normalize_count(text):
     # 1) 정상/유사 패턴: x/y
     m = re.search(r'(\d{1,2})\s*/\s*(\d{1,2})', raw)
     if m:
-        left = int(m.group(1))
-        right = int(m.group(2))
+        left_str = m.group(1)
+        right_str = m.group(2)
 
-        if left >= 10:
-            left = left % 10
-        if right >= 10:
-            right = right % 10
+        # Right side is almost always 7 or 9, but OCR often appends an extra
+        # digit from the closing parenthesis, e.g. "9)" -> "91".
+        if '9' in right_str:
+            right = 9
+        elif '7' in right_str:
+            right = 7
+        else:
+            right = int(right_str)
+
+        # Left side is a single digit, but OCR may prepend a stray digit from
+        # the opening parenthesis. Prefer the largest digit found to avoid
+        # collapsing into 0 when we see "70/91" etc.
+        if len(left_str) == 1:
+            left = int(left_str)
+        else:
+            left_digits = [int(d) for d in re.findall(r'\d', left_str)]
+            left = max(left_digits) if left_digits else 0
 
         # 총 횟수는 7 또는 9로 수렴 (OCR 오인식 보정)
         if right not in (7, 9):
@@ -782,10 +797,19 @@ def normalize_count(text):
         return f"{left}/{right}"
 
     # 2) 슬래시가 깨졌을 때: 숫자 2개를 x/y로 복원
-    digits = re.findall(r'\d', raw)
+    digits = [int(d) for d in re.findall(r'\d', raw)]
     if len(digits) >= 2:
-        left = int(digits[0])
-        right = int(digits[1])
+        # Denominator is almost always present as 7 or 9 in the OCR stream.
+        if 9 in digits:
+            right = 9
+        elif 7 in digits:
+            right = 7
+        else:
+            right = digits[-1]
+
+        # Pick a plausible numerator without collapsing to 0 from parentheses.
+        cand = [d for d in digits if d != right]
+        left = max(cand) if cand else digits[0]
         if right not in (7, 9):
             right = 7 if abs(right - 7) <= abs(right - 9) else 9
         if left > right:
