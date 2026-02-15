@@ -216,6 +216,70 @@
       cursor: not-allowed;
     }
 
+    .option-slot {
+      position: relative;
+    }
+
+    .option-slot.is-selected {
+      box-shadow: 0 0 0 2px rgba(110, 231, 247, 0.28), 0 10px 24px rgba(110, 231, 247, 0.12);
+    }
+
+    .option-slot.is-drop-hover {
+      border-color: rgba(110, 231, 247, 0.75);
+      box-shadow: 0 0 0 2px rgba(110, 231, 247, 0.22), 0 12px 26px rgba(110, 231, 247, 0.12);
+    }
+
+    .option-slot-empty {
+      opacity: 0.55;
+      border-style: dashed;
+    }
+
+    .option-slot-clear {
+      position: absolute;
+      top: 0.35rem;
+      right: 0.35rem;
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(2, 6, 23, 0.55);
+      color: rgba(226, 232, 240, 0.92);
+      font-weight: 900;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 140ms ease, border-color 140ms ease, opacity 140ms ease;
+    }
+
+    .option-slot-clear:hover {
+      transform: translateY(-1px);
+      border-color: rgba(110, 231, 247, 0.55);
+    }
+
+    .option-slot-clear:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .option-choice {
+      min-height: 3.25rem;
+      cursor: grab;
+    }
+
+    .option-choice:active {
+      cursor: grabbing;
+    }
+
+    .option-choice:disabled {
+      opacity: 0.32;
+      border-style: dashed;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
     .opt-will {
       --opt-border: rgba(255, 90, 60, 0.45);
       --opt-hover: var(--stat-will);
@@ -470,13 +534,14 @@
           </div>
         </div>
 
-	        <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+	        <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
 	          <button id="resetBtn" class="glow-btn rounded-lg border border-rose-400/60 bg-rose-400/15 px-4 py-3 text-sm font-bold text-rose-100">
 	            초기화
 	          </button>
-	          <div class="hidden sm:block"></div>
-	          <div class="hidden sm:block"></div>
-	          <button id="analyzeBtn" class="glow-btn rounded-lg border border-amber-300/60 bg-amber-300/20 px-4 py-3 text-sm font-bold text-amber-100" disabled>
+            <button id="optionPickerBtn" class="glow-btn rounded-lg border border-slate-500/60 bg-slate-500/10 px-4 py-3 text-sm font-bold text-slate-100">
+              옵션 선택
+            </button>
+	          <button id="analyzeBtn" class="glow-btn col-span-2 rounded-lg border border-amber-300/60 bg-amber-300/20 px-4 py-3 text-sm font-bold text-amber-100 sm:col-span-1" disabled>
 	            젬미나이
 	          </button>
 	        </div>
@@ -638,11 +703,52 @@
     </div>
   </div>
 
+  <div id="optionPickerModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4">
+    <div class="panel w-full max-w-6xl p-4 sm:p-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-lg font-extrabold tracking-tight text-sky-100">옵션 선택</div>
+          <div class="mt-1 text-xs text-slate-300">
+            팔레트에서 드래그해서 위 슬롯에 덮어씌우세요.
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            id="optionPickerRestoreBtn"
+            class="glow-btn rounded-lg border border-slate-500/60 bg-slate-500/10 px-3 py-2 text-xs font-semibold text-slate-100"
+          >
+            복원
+          </button>
+          <button
+            id="optionPickerCloseBtn"
+            class="glow-btn rounded-lg border border-cyan-400/60 bg-cyan-400/15 px-3 py-2 text-xs font-semibold text-cyan-100"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">현재 옵션(4칸)</div>
+        <div id="optionPickerSlots" class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4"></div>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <div id="optionPickerPaletteWrap" class="min-w-[56rem]"></div>
+      </div>
+
+      <div class="mt-3 text-[11px] text-slate-400">
+        팁: 슬롯을 클릭해 선택한 뒤 옵션을 클릭해도 적용됩니다.
+      </div>
+    </div>
+  </div>
+
   <script>
 			    const shareStartBtn = document.getElementById("shareStartBtn");
 			    const shareStopBtn = document.getElementById("shareStopBtn");
 				    const analyzeBtn = document.getElementById("analyzeBtn");
 				    const resetBtn = document.getElementById("resetBtn");
+            const optionPickerBtn = document.getElementById("optionPickerBtn");
 				    const screenVideo = document.getElementById("screenVideo");
 				    const roiAdjustBtn = document.getElementById("roiAdjustBtn");
 				    const roiAdjustModal = document.getElementById("roiAdjustModal");
@@ -673,6 +779,11 @@
     const countText = document.getElementById("countText");
     const costText = document.getElementById("costText");
     const optionsGrid = document.getElementById("optionsGrid");
+    const optionPickerModal = document.getElementById("optionPickerModal");
+    const optionPickerSlots = document.getElementById("optionPickerSlots");
+    const optionPickerPaletteWrap = document.getElementById("optionPickerPaletteWrap");
+    const optionPickerRestoreBtn = document.getElementById("optionPickerRestoreBtn");
+    const optionPickerCloseBtn = document.getElementById("optionPickerCloseBtn");
     const letterList = document.getElementById("letterList");
     const letterInput = document.getElementById("letterInput");
     const letterSendBtn = document.getElementById("letterSendBtn");
@@ -682,9 +793,9 @@
 			    const targetSumEl = document.getElementById("targetSum");
 
 	      const DEFAULT_NOTICE_ITEMS = [
-	        "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식 버그가 발생하고 있습니다.",
-	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
-	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역을 드래그로 조정할 수 있습니다.",
+	        "2026-02-15: 옵션 인식이 틀리면 '옵션 선택'에서 4칸을 드래그로 덮어씌워 수동 보정할 수 있습니다.",
+	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정할 수 있습니다.",
+	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역(옵션/리롤/가공횟수/골드)을 드래그로 조정할 수 있습니다.",
 	      ];
 
 	      function renderNoticeItems(items) {
@@ -881,7 +992,9 @@
 	            rerolls: false,
 	            attempts_left: false,
 	            cost_state: false,
+              options: false,
 	          },
+            optionOverrides: {},
             roiOverrides: null,
 			      ocrCount: null,
 				      lastResponse: null,
@@ -927,7 +1040,9 @@
 	            rerolls: false,
 	            attempts_left: false,
 	            cost_state: false,
+              options: false,
 	          };
+            state.optionOverrides = {};
 			      state.ocrCount = null;
 				      state.lastResponse = null;
 				      state.successProb = null;
@@ -1031,7 +1146,13 @@
 
     function isRerollOption(opt) {
       const blob = optionBlob(opt);
-      return blob.includes("reroll") || blob.includes("다른 항목") || blob.includes("항목 보기");
+      return (
+        blob.includes("reroll") ||
+        blob.includes("다른 항목") ||
+        blob.includes("항목 보기") ||
+        blob.includes("새로고침") ||
+        blob.includes("세로고침")
+      );
     }
 
     function isCostOption(opt) {
@@ -1109,6 +1230,755 @@
       return "opt-special";
     }
 
+    // ===== 옵션 선택 모달 (수동 보정) =====
+    const SUBOPT_ID_TO_LABEL_KO = {
+      0: "공격력",
+      1: "추가피해",
+      2: "보스피해",
+      3: "아군피해강화",
+      4: "낙인력",
+      5: "아군공격강화",
+    };
+
+    // OCR/서버 추론에서 확실히 잡히는 토큰(화이트리스트)을 raw_option으로 사용한다.
+    const SUBOPT_ID_TO_RAW_KO = {
+      0: "공격력",
+      1: "추가피해",
+      2: "보스피해",
+      3: "아군피해강화",
+      4: "낙인력",
+      5: "아군공격력강화",
+    };
+
+    const GEM_TYPE_ALLOWED_SUBOPTS = {
+      stable: [0, 1, 3, 4],
+      solid: [0, 2, 3, 5],
+      immutable: [1, 2, 4, 5],
+    };
+
+    const ROLE_SUBOPT_WEIGHT = {
+      dealer: { 0: 1.0, 1: 2.0, 2: 3.0, 3: 0.0, 4: 0.0, 5: 0.0 },
+      support: { 0: 0.0, 1: 0.0, 2: 0.0, 3: 1.0, 4: 2.0, 5: 3.0 },
+    };
+
+    let optionPickerSession = null;
+
+    function allowedSuboptsForGemType(gemType) {
+      const key = String(gemType || "stable").toLowerCase();
+      const ids = GEM_TYPE_ALLOWED_SUBOPTS[key] || GEM_TYPE_ALLOWED_SUBOPTS.stable;
+      return Array.isArray(ids) ? ids.slice() : GEM_TYPE_ALLOWED_SUBOPTS.stable.slice();
+    }
+
+    function pickDistinctKinds(allowed, preferred1, preferred2) {
+      const ids = Array.isArray(allowed) ? allowed.slice() : [];
+      if (ids.length < 2) return { e1: 0, e2: 1 };
+      let e1 = ids.includes(preferred1) ? preferred1 : ids[0];
+      let e2 = ids.includes(preferred2) ? preferred2 : (ids.find((x) => x !== e1) ?? ids[1]);
+      if (e1 === e2) {
+        e2 = ids.find((x) => x !== e1) ?? e2;
+      }
+      return { e1, e2 };
+    }
+
+    function defaultEffectKindsForPicker(allowed) {
+      const used = state.lastResponse?.rl?.state_used;
+      const p1 = used ? asInt(used.effect1_kind, -1) : -1;
+      const p2 = used ? asInt(used.effect2_kind, -1) : -1;
+      if (p1 >= 0 || p2 >= 0) {
+        return pickDistinctKinds(allowed, p1, p2);
+      }
+
+      const roleKey =
+        String(state.uiState?.role || "dealer").toLowerCase() === "support" ? "support" : "dealer";
+      const weights = ROLE_SUBOPT_WEIGHT[roleKey] || ROLE_SUBOPT_WEIGHT.dealer;
+      const ranked = allowed.slice().sort((a, b) => {
+        const wa = Number(weights[a] || 0);
+        const wb = Number(weights[b] || 0);
+        if (wb !== wa) return wb - wa;
+        return a - b;
+      });
+      const e1 = ranked[0] ?? allowed[0] ?? 0;
+      const e2 = ranked.find((x) => x !== e1) ?? ranked[1] ?? allowed[1] ?? 1;
+      return { e1, e2 };
+    }
+
+    function normalizeOptionArray4(list) {
+      const out = Array.isArray(list) ? list.slice(0, 4) : [];
+      while (out.length < 4) out.push(null);
+      return out;
+    }
+
+    function optionKey(opt) {
+      if (!opt || typeof opt !== "object") return "";
+      const cat = String(opt.category || "").toLowerCase();
+      const raw = String(opt.raw_option || opt.option || "").trim();
+      const pos = String(opt.position || "").trim();
+      const v = asInt(opt.value, 0);
+      return `${cat}|${v}|${raw}|${pos}`;
+    }
+
+    function ensureUiOptionsLen4() {
+      return normalizeOptionArray4(state.uiState?.options);
+    }
+
+    function setOptionOverride(idx, opt) {
+      if (!state.uiState) return;
+      const slot = clampIntRange(asInt(idx, 0), 0, 3);
+
+      const next = ensureUiOptionsLen4();
+      next[slot] = opt === undefined ? null : (opt || null);
+      state.uiState.options = next;
+
+      const baseOptions = normalizeOptionArray4(state.lastResponse?.ui_state?.options);
+      const baseKey = optionKey(baseOptions[slot]);
+      const nextKey = optionKey(next[slot]);
+
+      if (!state.optionOverrides || typeof state.optionOverrides !== "object") {
+        state.optionOverrides = {};
+      }
+
+      // Keep the override map minimal: if user sets the slot back to the server-provided value,
+      // drop the override so it won't accidentally affect the next analyze.
+      if (baseKey === nextKey) {
+        delete state.optionOverrides[String(slot)];
+      } else {
+        // Allow explicit null to clear the slot.
+        state.optionOverrides[String(slot)] = next[slot];
+      }
+
+      state.uiOverride.options = Object.keys(state.optionOverrides).length > 0;
+      renderAll();
+      if (optionPickerSession) renderOptionPickerSlots();
+    }
+
+    function restoreOptionsFromLastResponse() {
+      if (!state.uiState) return;
+      state.uiState.options = normalizeOptionArray4(state.lastResponse?.ui_state?.options);
+      state.optionOverrides = {};
+      state.uiOverride.options = false;
+      renderAll();
+      if (optionPickerSession) renderOptionPickerSlots();
+    }
+
+    function buildManualOptionItem({ category, value, raw, kindId }) {
+      const cat = String(category || "").toLowerCase();
+      const v = asInt(value, 0);
+      if (cat === "willpower") {
+        const sign = v >= 0 ? `+${v}` : `${v}`;
+        return {
+          text: `의지력 ${sign}`,
+          category: "willpower",
+          position: "other",
+          raw_option: "의지력 효율",
+          value: v,
+        };
+      }
+      if (cat === "points") {
+        const sign = v >= 0 ? `+${v}` : `${v}`;
+        return {
+          text: `질서혼돈 ${sign}`,
+          category: "points",
+          position: "other",
+          raw_option: "질서혼돈",
+          value: v,
+        };
+      }
+      if (cat === "effect1" || cat === "effect2") {
+        const kid = asInt(kindId, -1);
+        const rawName = SUBOPT_ID_TO_RAW_KO[kid] || "공격력";
+        const label = SUBOPT_ID_TO_LABEL_KO[kid] || rawName;
+        const position = cat === "effect1" ? "left" : "right";
+        if (v === 0) {
+          return {
+            text: `${label} 변환`,
+            category: cat,
+            position,
+            raw_option: `${rawName} 변경`,
+            value: 0,
+          };
+        }
+        const sign = v >= 0 ? `+${v}` : `${v}`;
+        return {
+          text: `${label} ${sign}`,
+          category: cat,
+          position,
+          raw_option: rawName,
+          value: v,
+        };
+      }
+      if (cat === "special") {
+        const key = String(raw || "").trim();
+        if (key.includes("비용")) {
+          const text = v >= 0 ? "비용 +100%" : "비용 -100%";
+          return {
+            text,
+            category: "special",
+            position: "other",
+            raw_option: "비용",
+            value: v >= 0 ? 100 : -100,
+          };
+        }
+        if (key.includes("새로고침") || key.includes("세로고침")) {
+          const gain = Math.max(1, Math.min(2, Math.abs(v || 1)));
+          return {
+            text: `새로고침 +${gain}`,
+            category: "special",
+            position: "other",
+            raw_option: "새로고침",
+            value: gain,
+          };
+        }
+        if (key.includes("상태")) {
+          return {
+            text: "상태 유지",
+            category: "special",
+            position: "other",
+            raw_option: "상태유지",
+            value: 0,
+          };
+        }
+        return {
+          text: String(raw || "옵션").trim() || "옵션",
+          category: "special",
+          position: "other",
+          raw_option: String(raw || "").trim(),
+          value: v,
+        };
+      }
+      return {
+        text: String(raw || "옵션").trim() || "옵션",
+        category: cat,
+        position: "other",
+        raw_option: String(raw || "").trim(),
+        value: v,
+      };
+    }
+
+    function coerceOptionObject(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const category = String(raw.category || "").trim().toLowerCase();
+      const value = asInt(raw.value, 0);
+      const position = String(raw.position || "other").trim() || "other";
+      const rawOption = String(raw.raw_option || raw.option || "").trim();
+      const text = String(raw.text || raw.formatted || rawOption || "").trim();
+      return {
+        text: text || "옵션",
+        category,
+        position,
+        raw_option: rawOption || text || "",
+        value,
+      };
+    }
+
+    function renderOptionPickerSlots() {
+      if (!optionPickerSlots) return;
+      const normalized = ensureUiOptionsLen4();
+      const selectedIdx = optionPickerSession ? asInt(optionPickerSession.selectedSlot, 0) : -1;
+
+      optionPickerSlots.innerHTML = normalized
+        .map((opt, idx) => {
+          const label = escapeHtml(textOfOption(opt));
+          const styleClass = optionStyleClass(opt);
+          const isSelected = idx === selectedIdx;
+          const emptyCls = opt ? "" : "option-slot-empty";
+          const selCls = isSelected ? "is-selected" : "";
+          return `
+            <div class="relative">
+              <button
+                type="button"
+                class="option-card option-slot ${styleClass} ${emptyCls} ${selCls} w-full p-3 text-left text-sm font-semibold"
+                data-slot-idx="${idx}"
+              >
+                <div class="text-xs uppercase tracking-wide text-slate-400">슬롯 ${idx + 1}</div>
+                <div class="mt-1 leading-snug">${label}</div>
+              </button>
+              <button type="button" class="option-slot-clear" data-slot-clear-idx="${idx}" aria-label="비우기">×</button>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    function optionFromChoiceButton(btn) {
+      const category = String(btn?.dataset?.choiceCat || "");
+      const value = asInt(btn?.dataset?.choiceVal, 0);
+      const raw = String(btn?.dataset?.choiceRaw || "");
+      const kindId = btn?.dataset?.choiceKind != null ? asInt(btn.dataset.choiceKind, -1) : null;
+      return buildManualOptionItem({ category, value, raw, kindId });
+    }
+
+    function togglePickerKindMenu(which) {
+      if (!optionPickerSession) return;
+      optionPickerSession.kindMenuOpen = optionPickerSession.kindMenuOpen === which ? null : which;
+      renderOptionPickerPalette();
+    }
+
+    function setPickerKind(which, kindId) {
+      if (!optionPickerSession) return;
+      const allowed = allowedSuboptsForGemType(state.uiState?.gem_type || "stable");
+      const kid = asInt(kindId, -1);
+      if (!allowed.includes(kid)) return;
+
+      const cur1 = asInt(optionPickerSession.effect1Kind, -1);
+      const cur2 = asInt(optionPickerSession.effect2Kind, -1);
+      if (which === "effect1") {
+        if (kid === cur2) {
+          optionPickerSession.effect1Kind = cur2;
+          optionPickerSession.effect2Kind = cur1;
+        } else {
+          optionPickerSession.effect1Kind = kid;
+        }
+      } else if (which === "effect2") {
+        if (kid === cur1) {
+          optionPickerSession.effect2Kind = cur1;
+          optionPickerSession.effect1Kind = cur2;
+        } else {
+          optionPickerSession.effect2Kind = kid;
+        }
+      }
+
+      // Keep both kinds valid/distinct.
+      const picked = pickDistinctKinds(allowed, optionPickerSession.effect1Kind, optionPickerSession.effect2Kind);
+      optionPickerSession.effect1Kind = picked.e1;
+      optionPickerSession.effect2Kind = picked.e2;
+      optionPickerSession.kindMenuOpen = null;
+      renderOptionPickerPalette();
+    }
+
+    function renderOptionPickerPalette() {
+      if (!optionPickerSession || !optionPickerPaletteWrap) return;
+      const allowed = allowedSuboptsForGemType(state.uiState?.gem_type || "stable");
+
+      const picked = pickDistinctKinds(
+        allowed,
+        optionPickerSession.effect1Kind,
+        optionPickerSession.effect2Kind,
+      );
+      optionPickerSession.effect1Kind = picked.e1;
+      optionPickerSession.effect2Kind = picked.e2;
+
+      const e1Label = SUBOPT_ID_TO_LABEL_KO[picked.e1] || "부옵션1";
+      const e2Label = SUBOPT_ID_TO_LABEL_KO[picked.e2] || "부옵션2";
+      const canChangeEffectKind = allowed.filter((id) => id !== picked.e1 && id !== picked.e2).length > 0;
+      const kindMenuOpen = String(optionPickerSession.kindMenuOpen || "");
+
+      const wpCur = asInt(state.current.willpower, 1);
+      const ptCur = asInt(state.current.points, 1);
+      const e1Cur = asInt(state.current.effect1_level, 1);
+      const e2Cur = asInt(state.current.effect2_level, 1);
+
+      const attemptsLeft = asInt(state.uiState?.attempts_left, 0);
+      const costState = asInt(state.uiState?.cost_state, 0);
+
+      const deltaVals = [1, 2, 3, 4, -1];
+
+      const mkDeltaBtn = ({ cat, val, name, styleClass, disabled, raw, kindId }) => {
+        const v = asInt(val, 0);
+        const sign = v >= 0 ? `+${v}` : `${v}`;
+        const valueCls = v < 0 ? "text-rose-200" : "text-slate-50";
+        return `
+          <button
+            type="button"
+            draggable="true"
+            class="option-card option-choice ${styleClass} p-2 text-center text-sm font-extrabold leading-tight"
+            ${disabled ? "disabled" : ""}
+            data-choice-cat="${escapeHtml(cat)}"
+            data-choice-val="${escapeHtml(String(v))}"
+            ${raw ? `data-choice-raw="${escapeHtml(raw)}"` : ""}
+            ${kindId != null ? `data-choice-kind="${escapeHtml(String(kindId))}"` : ""}
+          >
+            <div>${escapeHtml(name)}</div>
+            <div class="mt-0.5 ${valueCls}">${escapeHtml(sign)}</div>
+          </button>
+        `;
+      };
+
+      const mkTextBtn = ({ cat, val, name, valueText, styleClass, disabled, raw, kindId, valueCls }) => {
+        const v = asInt(val, 0);
+        return `
+          <button
+            type="button"
+            draggable="true"
+            class="option-card option-choice ${styleClass} p-2 text-center text-sm font-extrabold leading-tight"
+            ${disabled ? "disabled" : ""}
+            data-choice-cat="${escapeHtml(cat)}"
+            data-choice-val="${escapeHtml(String(v))}"
+            ${raw ? `data-choice-raw="${escapeHtml(raw)}"` : ""}
+            ${kindId != null ? `data-choice-kind="${escapeHtml(String(kindId))}"` : ""}
+          >
+            <div>${escapeHtml(name)}</div>
+            <div class="mt-0.5 ${valueCls || "text-slate-50"}">${escapeHtml(valueText)}</div>
+          </button>
+        `;
+      };
+
+      const colWill = `
+        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-2">
+          <div class="flex h-4 items-center text-[11px] font-semibold uppercase tracking-wide text-slate-300 leading-none">의지력</div>
+          <div class="mt-2 grid gap-2">
+            ${deltaVals.map((v) => mkDeltaBtn({
+              cat: "willpower",
+              val: v,
+              name: "의지력",
+              styleClass: "opt-will",
+              disabled: wpCur + v < 1 || wpCur + v > 5,
+            })).join("")}
+          </div>
+        </div>
+      `;
+
+      const colPoints = `
+        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-2">
+          <div class="flex h-4 items-center text-[11px] font-semibold uppercase tracking-wide text-slate-300 leading-none">질서혼돈</div>
+          <div class="mt-2 grid gap-2">
+            ${deltaVals.map((v) => mkDeltaBtn({
+              cat: "points",
+              val: v,
+              name: "질서혼돈",
+              styleClass: "opt-point",
+              disabled: ptCur + v < 1 || ptCur + v > 5,
+            })).join("")}
+          </div>
+        </div>
+      `;
+
+      const colEff1 = `
+        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-2">
+          <div class="relative">
+            <div class="flex h-4 items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-slate-300 leading-none">
+              <span class="truncate">${escapeHtml(e1Label)}</span>
+              <button
+                type="button"
+                class="glow-btn rounded-md border border-transparent bg-transparent px-1 text-[12px] leading-none text-slate-300 hover:border-slate-500/50 hover:bg-slate-900/30 hover:text-slate-100"
+                title="부옵션 종류 선택"
+                aria-label="부옵션 종류 선택"
+                data-kind-menu-toggle="effect1"
+              >▾</button>
+            </div>
+            <div
+              class="${kindMenuOpen === "effect1" ? "" : "hidden"} absolute left-0 top-full z-30 mt-1 w-full rounded-md border border-slate-700/80 bg-slate-950/95 p-1 shadow-lg"
+              data-kind-menu-panel="effect1"
+            >
+              ${allowed
+                .map((kid) => {
+                  const label = SUBOPT_ID_TO_LABEL_KO[kid] || `부옵션${kid}`;
+                  const isCur = kid === picked.e1;
+                  const mark = isCur ? "✓" : "";
+                  const cls = isCur ? "bg-cyan-400/10 text-cyan-100" : "text-slate-200 hover:bg-slate-900/40";
+                  return `
+                    <button
+                      type="button"
+                      class="${cls} flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs"
+                      data-kind-choice="effect1"
+                      data-kind-id="${escapeHtml(String(kid))}"
+                    >
+                      <span>${escapeHtml(label)}</span>
+                      <span class="text-[11px] text-slate-400">${escapeHtml(mark)}</span>
+                    </button>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+          <div class="mt-2 grid gap-2">
+            ${deltaVals.map((v) => mkDeltaBtn({
+              cat: "effect1",
+              val: v,
+              name: e1Label,
+              styleClass: "opt-eff1",
+              disabled: e1Cur + v < 1 || e1Cur + v > 5,
+              kindId: picked.e1,
+            })).join("")}
+          </div>
+        </div>
+      `;
+
+      const colEff2 = `
+        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-2">
+          <div class="relative">
+            <div class="flex h-4 items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-slate-300 leading-none">
+              <span class="truncate">${escapeHtml(e2Label)}</span>
+              <button
+                type="button"
+                class="glow-btn rounded-md border border-transparent bg-transparent px-1 text-[12px] leading-none text-slate-300 hover:border-slate-500/50 hover:bg-slate-900/30 hover:text-slate-100"
+                title="부옵션 종류 선택"
+                aria-label="부옵션 종류 선택"
+                data-kind-menu-toggle="effect2"
+              >▾</button>
+            </div>
+            <div
+              class="${kindMenuOpen === "effect2" ? "" : "hidden"} absolute left-0 top-full z-30 mt-1 w-full rounded-md border border-slate-700/80 bg-slate-950/95 p-1 shadow-lg"
+              data-kind-menu-panel="effect2"
+            >
+              ${allowed
+                .map((kid) => {
+                  const label = SUBOPT_ID_TO_LABEL_KO[kid] || `부옵션${kid}`;
+                  const isCur = kid === picked.e2;
+                  const mark = isCur ? "✓" : "";
+                  const cls = isCur ? "bg-cyan-400/10 text-cyan-100" : "text-slate-200 hover:bg-slate-900/40";
+                  return `
+                    <button
+                      type="button"
+                      class="${cls} flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs"
+                      data-kind-choice="effect2"
+                      data-kind-id="${escapeHtml(String(kid))}"
+                    >
+                      <span>${escapeHtml(label)}</span>
+                      <span class="text-[11px] text-slate-400">${escapeHtml(mark)}</span>
+                    </button>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+          <div class="mt-2 grid gap-2">
+            ${deltaVals.map((v) => mkDeltaBtn({
+              cat: "effect2",
+              val: v,
+              name: e2Label,
+              styleClass: "opt-eff2",
+              disabled: e2Cur + v < 1 || e2Cur + v > 5,
+              kindId: picked.e2,
+            })).join("")}
+          </div>
+        </div>
+      `;
+
+      const disableReroll = attemptsLeft <= 1;
+      const disableCost = attemptsLeft <= 1;
+      const colSpecial = `
+        <div class="rounded-lg border border-slate-700/80 bg-slate-950/40 p-2">
+          <div class="flex h-4 items-center text-[11px] font-semibold uppercase tracking-wide text-slate-300 leading-none">특수</div>
+          <div class="mt-2 grid gap-2">
+            ${mkTextBtn({
+              cat: "special",
+              val: 0,
+              name: "상태유지",
+              valueText: "유지",
+              styleClass: "opt-special",
+              disabled: false,
+              raw: "상태유지",
+              valueCls: "text-slate-50",
+            })}
+            ${mkTextBtn({
+              cat: "special",
+              val: 1,
+              name: "새로고침",
+              valueText: "+1",
+              styleClass: "opt-special",
+              disabled: disableReroll,
+              raw: "새로고침",
+              valueCls: "text-slate-50",
+            })}
+            ${mkTextBtn({
+              cat: "special",
+              val: 2,
+              name: "새로고침",
+              valueText: "+2",
+              styleClass: "opt-special",
+              disabled: disableReroll,
+              raw: "새로고침",
+              valueCls: "text-slate-50",
+            })}
+            ${mkTextBtn({
+              cat: "special",
+              val: 100,
+              name: "비용",
+              valueText: "+100%",
+              styleClass: "opt-special",
+              disabled: disableCost || costState >= 1,
+              raw: "비용",
+              valueCls: "text-slate-50",
+            })}
+            ${mkTextBtn({
+              cat: "special",
+              val: -100,
+              name: "비용",
+              valueText: "-100%",
+              styleClass: "opt-special",
+              disabled: disableCost || costState <= -1,
+              raw: "비용",
+              valueCls: "text-rose-200",
+            })}
+          </div>
+        </div>
+      `;
+
+      const transformRow = `
+        <div class="mt-3 grid grid-cols-5 gap-3">
+          <div></div>
+          <div></div>
+          ${mkTextBtn({
+            cat: "effect1",
+            val: 0,
+            name: e1Label,
+            valueText: "변환",
+            styleClass: "opt-eff1",
+            disabled: !canChangeEffectKind,
+            kindId: picked.e1,
+            valueCls: "text-slate-50",
+          })}
+          ${mkTextBtn({
+            cat: "effect2",
+            val: 0,
+            name: e2Label,
+            valueText: "변환",
+            styleClass: "opt-eff2",
+            disabled: !canChangeEffectKind,
+            kindId: picked.e2,
+            valueCls: "text-slate-50",
+          })}
+          <div></div>
+        </div>
+      `;
+
+      optionPickerPaletteWrap.innerHTML = `
+        <div class="grid grid-cols-5 gap-3">
+          ${[colWill, colPoints, colEff1, colEff2, colSpecial].join("")}
+        </div>
+        ${transformRow}
+      `;
+    }
+
+    function renderOptionPickerModal() {
+      if (!optionPickerSession) return;
+      renderOptionPickerSlots();
+      renderOptionPickerPalette();
+    }
+
+    function openOptionPickerModal() {
+      if (!optionPickerModal || !optionPickerSlots || !optionPickerPaletteWrap) return;
+      const allowed = allowedSuboptsForGemType(state.uiState?.gem_type || "stable");
+      const picked = defaultEffectKindsForPicker(allowed);
+      optionPickerSession = {
+        selectedSlot: 0,
+        effect1Kind: picked.e1,
+        effect2Kind: picked.e2,
+      };
+      renderOptionPickerModal();
+      optionPickerModal.classList.remove("hidden");
+      optionPickerModal.classList.add("flex");
+    }
+
+    function closeOptionPickerModal() {
+      if (!optionPickerModal) return;
+      optionPickerSession = null;
+      optionPickerModal.classList.add("hidden");
+      optionPickerModal.classList.remove("flex");
+    }
+
+    function bindOptionPickerControls() {
+      if (!optionPickerBtn || !optionPickerModal || !optionPickerSlots || !optionPickerPaletteWrap) return;
+      if (optionPickerModal.dataset.bound === "1") return;
+      optionPickerModal.dataset.bound = "1";
+
+      optionPickerBtn.addEventListener("click", openOptionPickerModal);
+
+      if (optionPickerCloseBtn) {
+        optionPickerCloseBtn.addEventListener("click", closeOptionPickerModal);
+      }
+      if (optionPickerRestoreBtn) {
+        optionPickerRestoreBtn.addEventListener("click", restoreOptionsFromLastResponse);
+      }
+
+      optionPickerModal.addEventListener("click", (ev) => {
+        if (ev.target === optionPickerModal) closeOptionPickerModal();
+      });
+
+      window.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && optionPickerSession) {
+          closeOptionPickerModal();
+        }
+      });
+
+      optionPickerSlots.addEventListener("click", (ev) => {
+        const clearBtn = ev.target && ev.target.closest ? ev.target.closest("[data-slot-clear-idx]") : null;
+        if (clearBtn) {
+          const idx = asInt(clearBtn.dataset.slotClearIdx, -1);
+          if (idx >= 0) setOptionOverride(idx, null);
+          return;
+        }
+        const slotBtn = ev.target && ev.target.closest ? ev.target.closest("[data-slot-idx]") : null;
+        if (!slotBtn || !optionPickerSession) return;
+        const idx = asInt(slotBtn.dataset.slotIdx, -1);
+        if (idx < 0) return;
+        optionPickerSession.selectedSlot = idx;
+        renderOptionPickerSlots();
+      });
+
+      optionPickerSlots.addEventListener("dragover", (ev) => {
+        const slotBtn = ev.target && ev.target.closest ? ev.target.closest("[data-slot-idx]") : null;
+        if (!slotBtn || slotBtn.disabled) return;
+        ev.preventDefault();
+        slotBtn.classList.add("is-drop-hover");
+      });
+
+      optionPickerSlots.addEventListener("dragleave", (ev) => {
+        const slotBtn = ev.target && ev.target.closest ? ev.target.closest("[data-slot-idx]") : null;
+        if (!slotBtn) return;
+        slotBtn.classList.remove("is-drop-hover");
+      });
+
+      optionPickerSlots.addEventListener("drop", (ev) => {
+        const slotBtn = ev.target && ev.target.closest ? ev.target.closest("[data-slot-idx]") : null;
+        if (!slotBtn) return;
+        ev.preventDefault();
+        slotBtn.classList.remove("is-drop-hover");
+        const idx = asInt(slotBtn.dataset.slotIdx, -1);
+        if (idx < 0) return;
+        const raw = (ev.dataTransfer && ev.dataTransfer.getData && ev.dataTransfer.getData("text/plain")) || "";
+        let parsed = null;
+        try {
+          parsed = raw ? JSON.parse(raw) : null;
+        } catch (_err) {
+          parsed = null;
+        }
+        const opt = coerceOptionObject(parsed);
+        if (!opt) return;
+        if (optionPickerSession) optionPickerSession.selectedSlot = idx;
+        setOptionOverride(idx, opt);
+      });
+
+      optionPickerPaletteWrap.addEventListener("click", (ev) => {
+        const kindMenuBtn = ev.target && ev.target.closest ? ev.target.closest("[data-kind-menu-toggle]") : null;
+        if (kindMenuBtn && optionPickerSession) {
+          const which = String(kindMenuBtn.dataset.kindMenuToggle || "");
+          if (which === "effect1" || which === "effect2") togglePickerKindMenu(which);
+          return;
+        }
+
+        const kindChoiceBtn = ev.target && ev.target.closest ? ev.target.closest("[data-kind-choice]") : null;
+        if (kindChoiceBtn && optionPickerSession) {
+          const which = String(kindChoiceBtn.dataset.kindChoice || "");
+          const kid = asInt(kindChoiceBtn.dataset.kindId, -1);
+          if (which === "effect1" || which === "effect2") setPickerKind(which, kid);
+          return;
+        }
+
+        const btn = ev.target && ev.target.closest ? ev.target.closest("[data-choice-cat]") : null;
+        if (!btn || btn.disabled || !optionPickerSession) return;
+        const opt = optionFromChoiceButton(btn);
+        const slot = clampIntRange(asInt(optionPickerSession.selectedSlot, 0), 0, 3);
+        if (optionPickerSession.kindMenuOpen) {
+          optionPickerSession.kindMenuOpen = null;
+          renderOptionPickerPalette();
+        }
+        setOptionOverride(slot, opt);
+      });
+
+      optionPickerPaletteWrap.addEventListener("dragstart", (ev) => {
+        const btn = ev.target && ev.target.closest ? ev.target.closest("[data-choice-cat]") : null;
+        if (!btn || btn.disabled) return;
+        const opt = optionFromChoiceButton(btn);
+        try {
+          ev.dataTransfer.setData("text/plain", JSON.stringify(opt));
+          ev.dataTransfer.effectAllowed = "copy";
+        } catch (_err) {
+          // ignore
+        }
+      });
+    }
+
     function renderAction(rl) {
       if (!rl || !rl.action_name) {
         actionText.textContent = "-";
@@ -1162,6 +2032,7 @@
 		      renderAction(state.lastResponse?.rl || null);
 	      renderSuccessProb();
 	      renderError();
+          if (optionPickerSession) renderOptionPickerModal();
 	    }
 
 		    function renderError() {
@@ -1862,7 +2733,7 @@
       }
     }
 
-		    async function analyzeCapture() {
+				    async function analyzeCapture() {
 		      if (!state.stream) {
 		        return;
 		      }
@@ -1877,6 +2748,13 @@
 		              formData.append("client_id", String(state.clientId));
 		            }
 		            const manualOverrides = {};
+                const optionOverridePayload =
+                  state.uiOverride?.options &&
+                  state.optionOverrides &&
+                  typeof state.optionOverrides === "object" &&
+                  Object.keys(state.optionOverrides).length
+                    ? JSON.stringify(state.optionOverrides)
+                    : "";
 		            if (state.uiOverride?.rerolls) {
 		              const v = Math.max(0, Math.min(5, asInt(state.uiState?.rerolls, 0)));
 		              formData.append("override_rerolls", String(v));
@@ -1892,6 +2770,10 @@
 		              formData.append("override_cost_state", String(v));
 		              manualOverrides.cost_state = v;
 		            }
+                if (optionOverridePayload) {
+                  formData.append("override_options_json", optionOverridePayload);
+                  manualOverrides.options = Object.keys(state.optionOverrides).map((k) => asInt(k, -1)).filter((v) => v >= 0);
+                }
 				        let captureMode = CAPTURE_PIPELINE;
 				        let roiSchemaVersion = ROI_SCHEMA_VERSION;
 				        let capture = null;
@@ -1989,6 +2871,9 @@
 			          if (state.uiOverride?.cost_state) {
 			            retryForm.append("override_cost_state", String(Math.max(-1, Math.min(1, asInt(state.uiState?.cost_state, 0)))));
 			          }
+                if (optionOverridePayload) {
+                  retryForm.append("override_options_json", optionOverridePayload);
+                }
 			          const retryCapture = await captureVideoFrameBlob();
 			          const retryBlob = retryCapture.blob;
 			          const retryFileName = `capture_retry_${Date.now()}.jpg`;
@@ -2091,6 +2976,10 @@
 	            role: String(body.ui_state?.role || state.uiState?.role || "dealer"),
 	            gem_type: String(body.ui_state?.gem_type || state.uiState?.gem_type || "stable"),
 		        };
+            if (optionOverridePayload) {
+              state.uiOverride.options = false;
+              state.optionOverrides = {};
+            }
 	        state.ocrCount = body.ocr_result?.count || null;
 
 	        const finalCountText = body?.ocr_result?.count;
@@ -2153,6 +3042,8 @@
       }
 
       state.uiState.options = [];
+      state.uiOverride.options = false;
+      state.optionOverrides = {};
       state.ocrCount = `${Math.max(0, asInt(state.uiState.attempts_left, 0))}`;
 	      renderAll();
 	    }
@@ -2230,6 +3121,7 @@
 			    bindStatControls();
 	        bindSummaryAdjustControls();
           bindRoiAdjustControls();
+          bindOptionPickerControls();
 	        renderNoticeItems(DEFAULT_NOTICE_ITEMS);
 	        loadNotice();
         loadLetters();

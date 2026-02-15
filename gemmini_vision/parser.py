@@ -12,6 +12,7 @@ from .detect import (
     normalize_cost,
     normalize_count,
     read_numeric_text_with_fallback,
+    read_count_text_with_multicrop,
     crop_center,
     ANNOTATION
 )
@@ -160,36 +161,7 @@ class GameStateParser:
                         print(f"  cost: {results['cost']}")
                     
                     elif label == "count":
-                        # Count area includes Korean text + parentheses.
-                        # In some cases OCR returns high-confidence "19" from "(7/9)".
-                        # Strategy:
-                        # 1) Prefer full ROI first (keeps context so slash candidates appear).
-                        # 2) If that fails or returns no slash, retry on a numeric-heavy sub-crop.
-                        raw_full = read_numeric_text_with_fallback(
-                            roi, allowlist="0123456789/", expected_len=3
-                        )
-                        norm_full = normalize_count(raw_full)
-
-                        norm = norm_full
-                        if norm is None or "/" not in str(raw_full or ""):
-                            num_roi = roi
-                            try:
-                                h, w = roi.shape[:2]
-                                x1 = int(w * 0.25)
-                                x2 = int(w * 0.98)
-                                y1 = int(h * 0.05)
-                                y2 = int(h * 0.95)
-                                if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
-                                    num_roi = roi[y1:y2, x1:x2]
-                            except Exception:
-                                num_roi = roi
-                            raw_crop = read_numeric_text_with_fallback(
-                                num_roi, allowlist="0123456789/", expected_len=3
-                            )
-                            norm_crop = normalize_count(raw_crop)
-                            if norm_crop is not None:
-                                norm = norm_crop
-
+                        _raw, norm = read_count_text_with_multicrop(roi)
                         results["count"] = norm
                         print(f"  count: {results['count']}")
                 
@@ -270,31 +242,7 @@ class GameStateParser:
                         continue
 
                     if label == "count":
-                        raw_full = read_numeric_text_with_fallback(
-                            roi, allowlist="0123456789/", expected_len=3
-                        )
-                        norm_full = normalize_count(raw_full)
-
-                        norm = norm_full
-                        if norm is None or "/" not in str(raw_full or ""):
-                            num_roi = roi
-                            try:
-                                h, w = roi.shape[:2]
-                                x1 = int(w * 0.25)
-                                x2 = int(w * 0.98)
-                                y1 = int(h * 0.05)
-                                y2 = int(h * 0.95)
-                                if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
-                                    num_roi = roi[y1:y2, x1:x2]
-                            except Exception:
-                                num_roi = roi
-                            raw_crop = read_numeric_text_with_fallback(
-                                num_roi, allowlist="0123456789/", expected_len=3
-                            )
-                            norm_crop = normalize_count(raw_crop)
-                            if norm_crop is not None:
-                                norm = norm_crop
-
+                        _raw, norm = read_count_text_with_multicrop(roi)
                         results["count"] = norm
                         continue
                 except Exception:
@@ -380,137 +328,147 @@ class GameStateParser:
             except:
                 pass
         
-        # options 변환 - 카테고리 기반으로 표준 UI 텍스트 생성
-        if 'options' in ocr_result:
-            for opt_info in ocr_result['options']:
-                option_name = opt_info.get('option')
-                value = opt_info.get('value', 0)
-                category = opt_info.get('category')
-                position = opt_info.get('position')
-                
-                # 옵션이 None이면 건너뜀 (인식 실패)
-                if option_name is None:
+        # options 변환 - 슬롯 4개(option1~4) 순서를 유지한다.
+        # detect_option()은 option1..4 순서로 결과를 쌓으므로, 여기서도 인덱스를 유지해야
+        # 프론트에서 "옵션 2가 인식 실패했는데 옵션 4로 밀리는" 현상을 피할 수 있다.
+        raw_options = ocr_result.get("options") if isinstance(ocr_result, dict) else None
+        raw_options = raw_options if isinstance(raw_options, list) else []
+
+        for opt_info in raw_options[:4]:
+            try:
+                if not isinstance(opt_info, dict):
+                    ui_state["options"].append(None)
                     continue
-                
+
+                option_name = opt_info.get("option")
+                value = opt_info.get("value", 0)
+                category = opt_info.get("category")
+                position = opt_info.get("position")
+                raw_ocr = opt_info.get("raw_ocr", "") or ""
+
+                # 옵션이 None이면(인식 실패) special은 raw_ocr로 복구를 시도하고,
+                # 그 외는 null 슬롯을 유지한다.
+                if option_name is None:
+                    if category == "special" and isinstance(raw_ocr, str) and raw_ocr:
+                        try:
+                            import re
+
+                            if "비용" in raw_ocr:
+                                is_plus = "증가" in raw_ocr or "+" in raw_ocr
+                                display_text = "비용 +100%" if is_plus else "비용 -100%"
+                                ui_state["options"].append(
+                                    {
+                                        "text": display_text,
+                                        "category": "special",
+                                        "position": "other",
+                                        "raw_option": "비용",
+                                        "value": 100 if is_plus else -100,
+                                    }
+                                )
+                                continue
+                            if "상태" in raw_ocr:
+                                ui_state["options"].append(
+                                    {
+                                        "text": "상태 유지",
+                                        "category": "special",
+                                        "position": "other",
+                                        "raw_option": "상태유지",
+                                        "value": 0,
+                                    }
+                                )
+                                continue
+                            if "새로고침" in raw_ocr or "세로고침" in raw_ocr:
+                                match = re.search(r"[+\-]?\d+", raw_ocr)
+                                val = int(match.group()) if match else 1
+                                ui_state["options"].append(
+                                    {
+                                        "text": f"새로고침 +{val}",
+                                        "category": "special",
+                                        "position": "other",
+                                        "raw_option": "새로고침",
+                                        "value": val,
+                                    }
+                                )
+                                continue
+                        except Exception:
+                            pass
+
+                    ui_state["options"].append(None)
+                    continue
+
                 # 카테고리 + position 기반으로 표준 UI 텍스트 생성
-                if category == 'effect1':
-                    is_change_opt = isinstance(option_name, str) and ('변경' in option_name)
+                if category == "effect1":
+                    is_change_opt = isinstance(option_name, str) and ("변경" in option_name)
                     # position이 right이면 잘못 분류된 것 -> effect2로 수정
-                    if position == 'right':
+                    if position == "right":
                         if is_change_opt or value == 0:
                             display_text = "부옵션2 변환"
                         else:
                             display_text = f"부옵션2 {value:+d}"
-                        standard_name = "부옵션2"
-                        print(f"  -> 수정: effect1 + right position => 부옵션2")
+                        print("  -> 수정: effect1 + right position => 부옵션2")
                     else:
                         if is_change_opt or value == 0:
                             display_text = "부옵션1 변환"
                         else:
                             display_text = f"부옵션1 {value:+d}"
-                        standard_name = "부옵션1"
-                elif category == 'effect2':
-                    is_change_opt = isinstance(option_name, str) and ('변경' in option_name)
+                elif category == "effect2":
+                    is_change_opt = isinstance(option_name, str) and ("변경" in option_name)
                     # position이 left이면 잘못 분류된 것 -> effect1로 수정
-                    if position == 'left':
+                    if position == "left":
                         if is_change_opt or value == 0:
                             display_text = "부옵션1 변환"
                         else:
                             display_text = f"부옵션1 {value:+d}"
-                        standard_name = "부옵션1"
-                        print(f"  -> 수정: effect2 + left position => 부옵션1")
+                        print("  -> 수정: effect2 + left position => 부옵션1")
                     else:
                         if is_change_opt or value == 0:
                             display_text = "부옵션2 변환"
                         else:
                             display_text = f"부옵션2 {value:+d}"
-                        standard_name = "부옵션2"
-                elif category == 'willpower':
+                elif category == "willpower":
                     display_text = f"의지력 {value:+d}"
-                    standard_name = "의지력"
-                elif category == 'points':
+                elif category == "points":
                     # 질서/혼돈 구분 (값의 부호로 판단 가능하지만 일단 통합)
                     display_text = f"질서혼돈 {value:+d}"
-                    standard_name = "질서혼돈"
-                elif category == 'special':
+                elif category == "special":
                     # 특수 옵션 처리
-                    if '비용' in option_name:
-                        if value > 0:
-                            display_text = f"비용 +100%"
-                        else:
-                            display_text = f"비용 -100%"
-                        standard_name = "비용"
-                    elif '새로고침' in option_name or '세로고침' in option_name:
+                    if isinstance(option_name, str) and "비용" in option_name:
+                        display_text = "비용 +100%" if value > 0 else "비용 -100%"
+                    elif isinstance(option_name, str) and ("새로고침" in option_name or "세로고침" in option_name):
                         display_text = f"새로고침 +{value}"
-                        standard_name = "새로고침"
-                    elif '상태' in option_name:
+                    elif isinstance(option_name, str) and "상태" in option_name:
                         display_text = "상태 유지"
-                        standard_name = "상태유지"
                     else:
                         display_text = option_name
-                        standard_name = option_name
                 else:
                     # unknown 카테고리: OCR 텍스트 + position으로 추정
-                    print(f"알 수 없는 카테고리 ({category}), 텍스트+위치로 추정: {option_name}, position={position}")
-                    if any(keyword in option_name for keyword in ['공격', '피해', '낙인', '보스']):
-                        if position == 'right':
+                    try:
+                        print(f"알 수 없는 카테고리 ({category}), 텍스트+위치로 추정: {option_name}, position={position}")
+                    except Exception:
+                        pass
+                    if isinstance(option_name, str) and any(keyword in option_name for keyword in ["공격", "피해", "낙인", "보스"]):
+                        if position == "right":
                             display_text = f"부옵션2 {value:+d}"
-                            standard_name = "부옵션2"
                         else:
                             display_text = f"부옵션1 {value:+d}"
-                            standard_name = "부옵션1"
                     else:
-                        # 그래도 모르면 건너뜀
-                        print(f"  -> 건너뜀")
+                        ui_state["options"].append(None)
                         continue
-                
-                ui_state['options'].append({
-                    'text': display_text,
-                    'category': category,
-                    'position': position,
-                    'raw_option': option_name,
-                    'value': value
-                })
-        
-        # option=None인 special 카테고리도 처리 (OCR 인식 실패한 비용 등)
-        if 'options' in ocr_result:
-            for opt_info in ocr_result['options']:
-                if opt_info.get('option') is None and opt_info.get('category') == 'special':
-                    raw_ocr = opt_info.get('raw_ocr', '')
-                    print(f"option=None인 special 추정: {raw_ocr}")
-                    
-                    # OCR 텍스트로 추정
-                    if '비용' in raw_ocr:
-                        if '증가' in raw_ocr:
-                            display_text = "비용 +100%"
-                        else:
-                            display_text = "비용 -100%"
-                        ui_state['options'].append({
-                            'text': display_text,
-                            'category': 'special',
-                            'position': 'other',
-                            'raw_option': '비용',
-                            'value': 100 if '증가' in raw_ocr else -100
-                        })
-                    elif '상태' in raw_ocr:
-                        ui_state['options'].append({
-                            'text': '상태 유지',
-                            'category': 'special',
-                            'position': 'other',
-                            'raw_option': '상태유지',
-                            'value': 0
-                        })
-                    elif '새로고침' in raw_ocr or '세로고침' in raw_ocr:
-                        import re
-                        match = re.search(r'[+\-]?\d+', raw_ocr)
-                        val = int(match.group()) if match else 1
-                        ui_state['options'].append({
-                            'text': f"새로고침 +{val}",
-                            'category': 'special',
-                            'position': 'other',
-                            'raw_option': '새로고침',
-                            'value': val
-                        })
+
+                ui_state["options"].append(
+                    {
+                        "text": display_text,
+                        "category": category,
+                        "position": position,
+                        "raw_option": option_name,
+                        "value": value,
+                    }
+                )
+            except Exception:
+                ui_state["options"].append(None)
+
+        while len(ui_state["options"]) < 4:
+            ui_state["options"].append(None)
         
         return ui_state
 

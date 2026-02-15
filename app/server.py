@@ -34,10 +34,9 @@ NOTICE_PATH = Path(
     str(os.getenv("GEMMINI_NOTICE_PATH", "") or "").strip() or (BASE_DIR / "notice.json")
 )
 DEFAULT_NOTICE_ITEMS: List[str] = [
-    "제보해주신 버그들을 순차적으로 해결중입니다. 피드백 항상 감사드립니다!",
-    "2026-02-14: 잦은 요청 시 성공 확률이 0%로만 나오던 버그를 해결했습니다.",
-    "2026-02-14: 다양한 해상도를 지원하는 과정에서 화면 인식(OCR) 버그가 발생하고 있습니다.",
-    "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정해서 사용 가능합니다.",
+    "2026-02-15: 옵션 인식이 틀리면 '옵션 선택'에서 4칸을 드래그로 덮어씌워 수동 보정할 수 있습니다.",
+    "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정할 수 있습니다.",
+    "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역(옵션/리롤/가공횟수/골드)을 드래그로 조정할 수 있습니다.",
 ]
 
 LETTERS_MAX_CHARS = int(os.getenv("GEMMINI_LETTERS_MAX_CHARS", "600"))
@@ -1944,6 +1943,7 @@ async def analyze_image(
     override_rerolls: Optional[int] = Form(None),
     override_attempts_left: Optional[int] = Form(None),
     override_cost_state: Optional[int] = Form(None),
+    override_options_json: Optional[str] = Form(None),
 ) -> dict:
     _verify_proxy_secret(request)
     ip = _client_ip(request)
@@ -2120,6 +2120,71 @@ async def analyze_image(
             manual_override["cost_state"] = v
     except Exception:
         manual_override = {}
+
+    # Optional: client-side manual override for the 4 option slots.
+    # Payload format: either a dict {"0": {...}, "3": {...}} or a list [slot0, slot1, slot2, slot3].
+    if override_options_json:
+        try:
+            raw = str(override_options_json)
+            if len(raw) > 40_000:
+                raise ValueError("override_options_json too large")
+            override_payload = json.loads(raw)
+
+            base_opts = ui_state.get("options") if isinstance(ui_state, dict) else []
+            base_opts = base_opts if isinstance(base_opts, list) else []
+            merged: list[Any] = list(base_opts[:4])
+            while len(merged) < 4:
+                merged.append(None)
+
+            def _coerce_item(v: Any) -> Optional[dict]:
+                if v is None:
+                    return None
+                if isinstance(v, dict):
+                    out: dict[str, Any] = {}
+                    for k in ("text", "category", "position", "raw_option", "option", "formatted", "value"):
+                        if k in v:
+                            out[k] = v.get(k)
+                    if "position" not in out or not out.get("position"):
+                        out["position"] = "other"
+                    if "value" in out:
+                        try:
+                            out["value"] = int(out.get("value") or 0)
+                        except Exception:
+                            out["value"] = 0
+                    return out
+
+                text = str(v or "")
+                value = _extract_signed_int(text)
+                return {
+                    "text": text,
+                    "category": "",
+                    "position": "other",
+                    "raw_option": text,
+                    "value": int(value) if value is not None else 0,
+                }
+
+            if isinstance(override_payload, list):
+                for idx in range(min(4, len(override_payload))):
+                    item = _coerce_item(override_payload[idx])
+                    # Explicit null clears the slot.
+                    merged[idx] = item
+            elif isinstance(override_payload, dict):
+                for k, v in override_payload.items():
+                    try:
+                        idx = int(k)
+                    except Exception:
+                        continue
+                    if idx < 0 or idx >= 4:
+                        continue
+                    item = _coerce_item(v)
+                    # Explicit null clears the slot.
+                    merged[idx] = item
+
+            ui_state["options"] = merged
+            manual_override["options"] = 1
+        except Exception:
+            # Best-effort; ignore invalid option override payloads.
+            pass
 
     if manual_override:
         ui_state["manual_override"] = dict(manual_override)
