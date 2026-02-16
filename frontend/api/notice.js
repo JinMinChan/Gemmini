@@ -23,7 +23,10 @@ export default async function handler(request) {
   }
 
   try {
-    const headers = { 'cache-control': 'no-store' };
+    const headers = {
+      'cache-control': 'no-store',
+      'ngrok-skip-browser-warning': 'true',
+    };
     const shared = (process.env.API_SHARED_SECRET || '').trim();
     if (shared) {
       headers['x-gemmini-key'] = shared;

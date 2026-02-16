@@ -44,7 +44,9 @@ export default async function handler(request) {
 
   try {
     const form = await request.formData();
-    const headers = {};
+    const headers = {
+      'ngrok-skip-browser-warning': 'true',
+    };
     const shared = (process.env.API_SHARED_SECRET || '').trim();
     if (shared) {
       headers['x-gemmini-key'] = shared;

@@ -21,7 +21,10 @@ export default async function handler() {
   try {
     const upstream = await fetch(`${backend}/api/health`, {
       method: 'GET',
-      headers: { 'cache-control': 'no-store' },
+      headers: {
+        'cache-control': 'no-store',
+        'ngrok-skip-browser-warning': 'true',
+      },
     });
     const body = await upstream.json().catch(() => ({}));
     const backendOk = Boolean(upstream.ok && body && body.ok);
