@@ -2177,12 +2177,14 @@
       { label: "option3", x: 1360.36, y: 796.02, w: 158.72, h: 113.83 },
       { label: "option4", x: 1512.67, y: 795.22, w: 152.31, h: 109.02 },
       { label: "possible", x: 1669.79, y: 794.41, w: 126.66, h: 59.32 },
-      // NOTE: cost/count boxes are slightly enlarged to avoid clipping digits
-      // under different UI scales (e.g. "1,800" losing the leading '1').
+      // NOTE: cost is slightly enlarged to avoid clipping digits under different UI scales
+      // (e.g. "1,800" losing the leading '1'). Count is shifted/tightened to focus the "(n/7)" text.
       { label: "cost", x: 1579.21, y: 887.40, w: 150.00, h: 70.00 },
-      { label: "count", x: 1476.60, y: 1022.08, w: 120.00, h: 80.00 },
+      { label: "count", x: 1496.60, y: 1022.08, w: 80.00, h: 80.00 },
     ];
     const ROI_OVERRIDE_STORAGE_KEY = "gemmini_roi_overrides_screen_v2";
+    const ROI_OVERRIDE_STORAGE_REV = 2;
+    const ROI_COUNT_OVERRIDE_MIGRATE_DX = 20.0; // old(default=1476.60) -> new(default=1496.60)
     const ROI_ADJUST_LABELS = ["option1", "option2", "option3", "option4", "possible", "cost", "count"];
 
     function loadRoiOverridesFromStorage() {
@@ -2191,13 +2193,17 @@
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== "object") return null;
+        const rev = asInt(parsed.__rev, 1);
         const out = {};
         for (const label of ROI_ADJUST_LABELS) {
           const v = parsed[label];
           if (!v || typeof v !== "object") continue;
-          const x = Number(v.x);
+          let x = Number(v.x);
           const y = Number(v.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          if (label === "count" && rev < ROI_OVERRIDE_STORAGE_REV) {
+            x += ROI_COUNT_OVERRIDE_MIGRATE_DX;
+          }
           out[label] = {
             x: Math.max(0, Math.min(ROI_BASE_WIDTH, x)),
             y: Math.max(0, Math.min(ROI_BASE_HEIGHT, y)),
@@ -2215,7 +2221,8 @@
           window.localStorage.removeItem(ROI_OVERRIDE_STORAGE_KEY);
           return;
         }
-        window.localStorage.setItem(ROI_OVERRIDE_STORAGE_KEY, JSON.stringify(overrides));
+        const payload = { ...overrides, __rev: ROI_OVERRIDE_STORAGE_REV };
+        window.localStorage.setItem(ROI_OVERRIDE_STORAGE_KEY, JSON.stringify(payload));
       } catch (_err) {
         // ignore storage failures
       }
