@@ -763,10 +763,38 @@
 				    const targetSumEl = document.getElementById("targetSum");
 
 	      const DEFAULT_NOTICE_ITEMS = [
+	        "2026-02-19: 2월 중으로 젬미나이 서비스가 종료됩니다. 자세한 내용은 https://www.inven.co.kr/board/lostark/4821/109447 을 참고해주시면 감사드리겠습니다.",
 	        "2026-02-15: 옵션 인식이 틀리면 '옵션 선택'에서 4칸을 드래그로 덮어씌워 수동 보정할 수 있습니다.",
 	        "2026-02-14: 리롤/가공횟수/가공비용은 아래 +/- 버튼으로 수동 조정할 수 있습니다.",
 	        "2026-02-14: 공유 화면 옆 '화면 조정'에서 인식 영역(옵션/리롤/가공횟수/골드)을 드래그로 조정할 수 있습니다.",
 	      ];
+
+	      const NOTICE_URL_REGEX = /(https?:\/\/[^\s]+)/g;
+
+	      function appendNoticeTextWithLinks(targetEl, text) {
+	        if (!targetEl) return;
+	        const src = String(text || "").trim();
+	        if (!src) return;
+	        let last = 0;
+	        src.replace(NOTICE_URL_REGEX, (url, offset) => {
+	          const at = Number(offset) || 0;
+	          if (at > last) {
+	            targetEl.appendChild(document.createTextNode(src.slice(last, at)));
+	          }
+	          const a = document.createElement("a");
+	          a.href = url;
+	          a.target = "_blank";
+	          a.rel = "noopener noreferrer";
+	          a.className = "underline decoration-cyan-300/80 underline-offset-2 hover:text-cyan-200";
+	          a.textContent = url;
+	          targetEl.appendChild(a);
+	          last = at + url.length;
+	          return url;
+	        });
+	        if (last < src.length) {
+	          targetEl.appendChild(document.createTextNode(src.slice(last)));
+	        }
+	      }
 
 	      function renderNoticeItems(items) {
 	        if (!noticeList) return;
@@ -780,7 +808,7 @@
 	        }
 	        for (const raw of list) {
 	          const li = document.createElement("li");
-	          li.textContent = String(raw || "").trim();
+	          appendNoticeTextWithLinks(li, raw);
 	          noticeList.appendChild(li);
 	        }
 	      }
