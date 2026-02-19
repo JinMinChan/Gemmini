@@ -8,10 +8,9 @@ import numpy as np
 # detect.py에서 함수들 import
 from .detect import (
     detect_option,
-    normalize_possible,
     normalize_cost,
-    normalize_count,
     read_numeric_text_with_fallback,
+    read_possible_text_with_multicrop,
     read_count_text_with_multicrop,
     crop_center,
     ANNOTATION
@@ -131,28 +130,8 @@ class GameStateParser:
                         results.setdefault("options", []).append(option_info)
                     
                     elif label == "possible":
-                        # "X회 가능" 영역은 숫자(왼쪽) + 한글(오른쪽)로 구성되어 OCR이
-                        # 한글 글리프까지 같이 읽으면서 0 -> 3 같은 오인식이 자주 발생한다.
-                        # 숫자 영역만 잘라서 OCR을 수행한다.
-                        num_roi = roi
-                        try:
-                            h, w = roi.shape[:2]
-                            # NOTE: 기존 crop(아이콘+한글 일부 포함)에서는 회색 0회 가능 상태가
-                            #       아이콘/한글에 끌려 '302' 같은 형태로 오인식되는 케이스가 있었다.
-                            #       아이콘/한글을 최대한 배제하고 숫자 중심부만 취한다.
-                            # 실제 숫자는 아이콘 오른쪽에 더 가깝게 위치한다. 너무 오른쪽을 자르면
-                            # 숫자가 잘려 0으로 떨어지는 케이스가 많아서, 약간 왼쪽으로 이동한다.
-                            x1 = int(w * 0.15)
-                            x2 = int(w * 0.48)
-                            y1 = int(h * 0.15)
-                            y2 = int(h * 0.90)
-                            if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
-                                num_roi = roi[y1:y2, x1:x2]
-                        except Exception:
-                            num_roi = roi
-
-                        raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
-                        results["possible"] = normalize_possible(raw)
+                        _raw, norm = read_possible_text_with_multicrop(roi)
+                        results["possible"] = norm
                         print(f"  possible: {results['possible']}")
                     
                     elif label == "cost":
@@ -221,19 +200,8 @@ class GameStateParser:
                         continue
 
                     if label == "possible":
-                        num_roi = roi
-                        try:
-                            h, w = roi.shape[:2]
-                            x1 = int(w * 0.15)
-                            x2 = int(w * 0.48)
-                            y1 = int(h * 0.15)
-                            y2 = int(h * 0.90)
-                            if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
-                                num_roi = roi[y1:y2, x1:x2]
-                        except Exception:
-                            num_roi = roi
-                        raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
-                        results["possible"] = normalize_possible(raw)
+                        _raw, norm = read_possible_text_with_multicrop(roi)
+                        results["possible"] = norm
                         continue
 
                     if label == "cost":

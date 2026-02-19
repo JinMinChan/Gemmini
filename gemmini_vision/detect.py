@@ -152,6 +152,222 @@ def read_numeric_text_with_fallback(roi, allowlist, expected_len=None):
     raw = reader_num.readtext(proc, detail=0, allowlist=clean_allowlist)
     return raw[0] if raw else ""
 
+
+def _safe_crop_frac(roi, *, x1f: float, x2f: float, y1f: float, y2f: float):
+    h, w = roi.shape[:2]
+    x1 = int(round(max(0.0, min(1.0, x1f)) * w))
+    x2 = int(round(max(0.0, min(1.0, x2f)) * w))
+    y1 = int(round(max(0.0, min(1.0, y1f)) * h))
+    y2 = int(round(max(0.0, min(1.0, y2f)) * h))
+    x1 = max(0, min(w - 1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h - 1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    return roi[y1:y2, x1:x2]
+
+
+def _tight_numeric_bbox_crop(roi):
+    """
+    Try to isolate the bright numeric glyphs inside a small ROI (e.g. "(7/9)").
+    This is intentionally cheap and tolerant because the ROI is tiny.
+    """
+    try:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # If background becomes white, invert so glyphs are white.
+        if float(th.mean()) > 127.0:
+            th = cv2.bitwise_not(th)
+
+        kernel = np.ones((2, 2), np.uint8)
+        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        ys, xs = np.where(th > 0)
+        if xs.size < 16 or ys.size < 16:
+            return None
+
+        h, w = roi.shape[:2]
+        x1 = int(xs.min())
+        x2 = int(xs.max())
+        y1 = int(ys.min())
+        y2 = int(ys.max())
+
+        pad = max(2, int(round(min(h, w) * 0.08)))
+        x1 = max(0, x1 - pad)
+        y1 = max(0, y1 - pad)
+        x2 = min(w, x2 + pad)
+        y2 = min(h, y2 + pad)
+
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return None
+
+        return roi[y1:y2, x1:x2]
+    except Exception:
+        return None
+
+
+def _parse_count_norm(norm: str):
+    try:
+        left_s, right_s = str(norm).split("/", 1)
+        return int(left_s), int(right_s)
+    except Exception:
+        return None
+
+
+def _count_raw_has_valid_den(raw: str) -> bool:
+    # We only support count denominators 7 or 9 (rare/hero). Exclude other modes (e.g. /5).
+    s = str(raw or "")
+    digits = re.findall(r"\d", s)
+    if not digits:
+        return False
+    if "7" not in digits and "9" not in digits:
+        return False
+    if "/" in s:
+        den_part = s.split("/")[-1]
+        den_digits = re.findall(r"\d", den_part)
+        return bool(den_digits) and any(d in ("7", "9") for d in den_digits)
+    return True
+
+
+def read_possible_text_with_multicrop(roi):
+    """
+    Robust OCR for the "n회 가능" field.
+
+    The left refresh icon is frequently mistaken as a digit (mostly 3/5),
+    so we sample a few numeric-focused sub-crops and select by vote.
+    """
+    if roi is None or not isinstance(roi, np.ndarray) or roi.size == 0:
+        return "", 0
+
+    candidates = []
+    specs = [
+        # Legacy crop kept for compatibility with older UI captures.
+        ("legacy", 0.15, 0.48, 0.15, 0.90, 1.0),
+        # Lift top boundary to keep the full glyph body (fixes 1 -> 3 cases).
+        ("legacy_top", 0.15, 0.48, 0.10, 0.90, 1.0),
+        # Shift right to reduce icon contamination (fixes 0 -> 5 cases).
+        ("shifted", 0.20, 0.50, 0.10, 0.90, 2.0),
+        # Slightly tighter center crop for noisy captures.
+        ("center", 0.24, 0.52, 0.15, 0.90, 2.0),
+    ]
+
+    for name, x1f, x2f, y1f, y2f, weight in specs:
+        sub = _safe_crop_frac(roi, x1f=x1f, x2f=x2f, y1f=y1f, y2f=y2f)
+        if sub is not None:
+            candidates.append((name, sub, float(weight)))
+
+    if not candidates:
+        return "", 0
+
+    votes = []
+    scores = {}
+    raws_by_value = {}
+    for _name, sub, weight in candidates:
+        raw = read_numeric_text_with_fallback(sub, allowlist="012345", expected_len=1)
+        if not raw:
+            continue
+        value = normalize_possible(raw)
+        votes.append(int(value))
+        scores[int(value)] = float(scores.get(int(value), 0.0)) + float(weight)
+        raws_by_value.setdefault(int(value), []).append((float(weight), str(raw)))
+
+    if not votes:
+        return "", 0
+
+    if not scores:
+        return "", 0
+
+    best_score = max(scores.values())
+    tied = [v for v, s in scores.items() if s == best_score]
+
+    if len(tied) == 1:
+        picked = tied[0]
+    else:
+        # Tie-break toward the median cluster, then the smaller value.
+        sv = sorted(votes)
+        n = len(sv)
+        med = float(sv[n // 2]) if (n % 2 == 1) else ((sv[n // 2 - 1] + sv[n // 2]) / 2.0)
+        tied.sort(key=lambda v: (abs(float(v) - med), v))
+        picked = tied[0]
+
+    picked_raw = ""
+    for _w, raw in sorted(raws_by_value.get(picked, []), key=lambda x: (-x[0], len(x[1]))):
+        picked_raw = raw
+        break
+    return picked_raw, int(picked)
+
+
+def read_count_text_with_multicrop(roi):
+    """
+    Robust count OCR for the \"(n/7)\" or \"(n/9)\" field.
+
+    EasyOCR is often distracted by nearby Korean glyphs and parentheses, returning
+    strings like \"19\" or \"1284/52\". Instead of hardcoding a single crop,
+    try multiple cheap sub-crops and choose the most plausible ratio.
+    """
+    if roi is None or not isinstance(roi, np.ndarray) or roi.size == 0:
+        return "", None
+
+    candidates = [("full", roi)]
+
+    # Numeric-heavy crops (keep slash context; avoid cutting too aggressively).
+    c1 = _safe_crop_frac(roi, x1f=0.10, x2f=0.99, y1f=0.00, y2f=1.00)
+    if c1 is not None:
+        candidates.append(("wide", c1))
+    c2 = _safe_crop_frac(roi, x1f=0.20, x2f=0.99, y1f=0.05, y2f=0.95)
+    if c2 is not None:
+        candidates.append(("right", c2))
+    c3 = _safe_crop_frac(roi, x1f=0.05, x2f=0.95, y1f=0.10, y2f=0.90)
+    if c3 is not None:
+        candidates.append(("center", c3))
+
+    tight = _tight_numeric_bbox_crop(roi)
+    if tight is not None:
+        candidates.append(("tight", tight))
+
+    best_raw = ""
+    best_norm = None
+    best_score = -1e9
+
+    for _name, sub in candidates:
+        raw = read_numeric_text_with_fallback(sub, allowlist="0123456789/", expected_len=3)
+        norm = normalize_count(raw)
+        if norm is None:
+            continue
+        parsed = _parse_count_norm(norm)
+        if not parsed:
+            continue
+        left, right = parsed
+        if right not in (7, 9):
+            continue
+        if left < 0 or left > right:
+            continue
+        if not _count_raw_has_valid_den(raw):
+            continue
+
+        raw_s = str(raw or "")
+        score = 0.0
+        score += 1.0 if "/" in raw_s else -0.5
+        score -= 0.25 * max(0, raw_s.count("/") - 1)
+        # Penalize very long digit streams (often noise like \"1284/52\").
+        score -= 0.06 * max(0, len(raw_s) - 5)
+        # Prefer clean denominators that explicitly include 7/9.
+        den_part = raw_s.split("/")[-1] if "/" in raw_s else raw_s
+        score += 0.8 if ("7" in den_part or "9" in den_part) else 0.0
+
+        # Prefer keeping context (full ROI) when equally plausible.
+        if _name == "full":
+            score += 0.10
+
+        if score > best_score:
+            best_score = score
+            best_raw = raw
+            best_norm = norm
+
+    return best_raw, best_norm
+
 # =========================
 # center ROI crop
 # =========================
@@ -803,11 +1019,22 @@ def normalize_count(text):
         # Left side is a single digit, but OCR may prepend a stray digit from
         # the opening parenthesis. Prefer the largest digit found to avoid
         # collapsing into 0 when we see "70/91" etc.
-        if len(left_str) == 1:
-            left = int(left_str)
+        left_digits = [int(d) for d in re.findall(r'\d', left_str)]
+        if len(left_digits) == 1:
+            left = int(left_digits[0])
         else:
-            left_digits = [int(d) for d in re.findall(r'\d', left_str)]
-            left = max(left_digits) if left_digits else 0
+            # Common noise pattern for "(5/9)" is "75/9" where a stray leading
+            # 7 appears before the true numerator. Fix this specific case
+            # without changing broader behavior.
+            if (
+                right == 9
+                and len(left_digits) >= 2
+                and left_digits[0] == 7
+                and 0 <= left_digits[1] <= 6
+            ):
+                left = int(left_digits[1])
+            else:
+                left = max(left_digits) if left_digits else 0
 
         # 총 횟수는 7 또는 9로 수렴 (OCR 오인식 보정)
         if right not in (7, 9):
@@ -862,21 +1089,8 @@ def main():
             results.setdefault("options", []).append(option_info)
 
         elif label == "possible":
-            # "X회 가능" 영역에서 숫자만 잘라서 OCR (한글까지 같이 읽으면 오인식 빈번)
-            num_roi = roi
-            try:
-                h, w = roi.shape[:2]
-                x1 = int(w * 0.15)
-                x2 = int(w * 0.48)
-                y1 = int(h * 0.15)
-                y2 = int(h * 0.90)
-                if 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h:
-                    num_roi = roi[y1:y2, x1:x2]
-            except Exception:
-                num_roi = roi
-
-            raw = read_numeric_text_with_fallback(num_roi, allowlist="012345", expected_len=1)
-            results["possible"] = normalize_possible(raw)
+            _raw, norm = read_possible_text_with_multicrop(roi)
+            results["possible"] = norm
 
         elif label == "cost":
             raw = read_numeric_text_with_fallback(roi, allowlist="0189")

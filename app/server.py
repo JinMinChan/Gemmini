@@ -2160,8 +2160,21 @@ async def analyze_image(
             timings_ms["goal_success_predict"] = (time.perf_counter() - t_goal0) * 1000.0
 
         # UX rule: if success probability is 0%, recommend stop.
+        # But do not hard-stop on the very first turn (7/7 or 9/9); early OCR
+        # noise can create false-zero, and users expect at least one process.
         try:
-            if goal_success_prob is not None and float(goal_success_prob) <= 0.0 and isinstance(rl_result, dict):
+            count_left0, count_right0 = _parse_count((ocr_result or {}).get("count"))
+            is_initial_turn = bool(
+                count_left0 is not None
+                and count_right0 in (7, 9)
+                and int(count_left0) == int(count_right0)
+            )
+            if (
+                goal_success_prob is not None
+                and float(goal_success_prob) <= 0.0
+                and isinstance(rl_result, dict)
+                and not is_initial_turn
+            ):
                 rl_result["action"] = 2
                 rl_result["action_name"] = ACTION_NAME.get(2, "stop")
                 rl_result["confidence"] = 1.0
